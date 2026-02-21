@@ -1,0 +1,35 @@
+{
+  "name": "whatsapp-group-bot",
+  "version": "1.0.0",
+  "description": "An AI-powered WhatsApp group chat bot with a web-based admin panel",
+  "main": "src/bot.js",
+  "scripts": {
+    "start": "node src/bot.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "Najib El Mokhtari",
+  "license": "ISC",
+  "dependencies": {
+    "@google/generative-ai": "^0.24.1",
+    "@puppeteer/browsers": "^2.4.0",
+    "axios": "^1.11.0",
+    "chokidar": "^4.0.3",
+    "dotenv": "^17.2.1",
+    "ejs": "^4.0.1",
+    "express": "^5.2.1",
+    "express-rate-limit": "^8.2.1",
+    "express-session": "^1.19.0",
+    "google-auth-library": "^10.5.0",
+    "proper-lockfile": "^4.1.2",
+    "qrcode-terminal": "^0.12.0",
+    "sharp": "^0.34.3",
+    "sqlite": "^5.1.1",
+    "sqlite3": "^5.1.7",
+    "whatsapp-web.js": "github:pedroslopez/whatsapp-web.js#main"
+  },
+  "overrides": {
+    "puppeteer": "23.6.0",
+    "puppeteer-core": "23.6.0"
+  }
+}

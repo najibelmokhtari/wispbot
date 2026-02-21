@@ -1,0 +1,14 @@
+module.exports = {
+  apps: [
+    {
+      name: 'whatsapp-bot',
+      script: 'src/bot.js',
+      env: {
+        NODE_ENV: 'development',
+      },
+      env_production: {
+        NODE_ENV: 'production',
+      },
+    },
+  ],
+};

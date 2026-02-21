@@ -1,0 +1,1 @@
+To tag/mention a user in WhatsApp, write their name in this exact format: @[Name] (e.g., @[Najib]). The name must match one from the Group Participants list.

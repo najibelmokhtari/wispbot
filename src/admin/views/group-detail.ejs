@@ -1,0 +1,248 @@
+<%- include('layout') %>
+
+<p><a href="<%= basePath %>/groups">&larr; Back to Groups</a></p>
+
+<h2><%= group.group_name || group.group_id %></h2>
+<p style="color:#999"><small><%= group.group_id %></small></p>
+
+<!-- Settings -->
+<article>
+    <header><strong>Settings</strong></header>
+    <div class="settings-grid">
+        <fieldset>
+            <label>
+                <input type="checkbox" role="switch" id="toggle-google_search_enabled"
+                    data-group="<%= group.group_id %>" data-field="google_search_enabled"
+                    <%= group.google_search_enabled ? 'checked' : '' %>
+                    onchange="toggleSetting(this)">
+                Google Search
+                <span class="info-icon">i<span class="info-tooltip">Allows the AI to search Google for up-to-date information when answering questions. The AI decides automatically when a search would be helpful.</span></span>
+            </label>
+            <label>
+                <input type="checkbox" role="switch" id="toggle-audio_enabled"
+                    data-group="<%= group.group_id %>" data-field="audio_enabled"
+                    <%= group.audio_enabled ? 'checked' : '' %>
+                    onchange="toggleSetting(this)">
+                Audio Processing
+                <span class="info-icon">i<span class="info-tooltip">When enabled, the bot transcribes voice messages and audio files sent in the chat, and includes the transcription in the AI's context. When disabled, audio messages are ignored.</span></span>
+            </label>
+            <label>
+                <input type="checkbox" role="switch" id="toggle-tts_enabled"
+                    data-group="<%= group.group_id %>" data-field="tts_enabled"
+                    <%= group.tts_enabled ? 'checked' : '' %>
+                    onchange="toggleSetting(this)">
+                Text-to-Speech
+                <span class="info-icon">i<span class="info-tooltip">Allows users to receive the bot's response as a voice message. Triggered when a user includes the Text-To-Speech trigger tag in their message. Configure the trigger tag in Settings.</span></span>
+            </label>
+            <label>
+                <input type="checkbox" role="switch" id="toggle-authorization_check_enabled"
+                    data-group="<%= group.group_id %>" data-field="authorization_check_enabled"
+                    <%= group.authorization_check_enabled ? 'checked' : '' %>
+                    onchange="toggleSetting(this)">
+                Authorization Check
+                <span class="info-icon">i<span class="info-tooltip">When enabled, only authorized users and admins can invoke the bot in this chat. Unauthorized users are silently ignored. Manage authorized users from the Users page.</span></span>
+            </label>
+        </fieldset>
+        <fieldset>
+            <label for="select-model">AI Model</label>
+            <select id="select-model" data-group="<%= group.group_id %>" onchange="updateDropdown(this, 'ai_model')">
+                <% for (const [key, info] of Object.entries(models)) { %>
+                <option value="<%= key %>" <%= (group.ai_model || 'gemini-2.5-pro') === key ? 'selected' : '' %>><%= info.displayName %></option>
+                <% } %>
+            </select>
+            <label for="select-persona">Persona</label>
+            <div style="display:flex; gap:0.5rem; align-items:center;">
+                <select id="select-persona" data-group="<%= group.group_id %>" onchange="updateDropdown(this, 'default_prompt_name')" style="margin-bottom:0">
+                    <% for (const p of personas) { %>
+                    <option value="<%= p %>" <%= (group.default_prompt_name || 'default') === p ? 'selected' : '' %>><%= p %></option>
+                    <% } %>
+                </select>
+                <a id="edit-persona-link" href="<%= basePath %>/settings#persona-<%= group.default_prompt_name || 'default' %>" class="outline secondary" role="button" style="white-space:nowrap; padding:0.5rem 0.75rem; font-size:0.85rem;<%= (group.default_prompt_name || 'default') === 'default' ? ' display:none;' : '' %>">Edit Persona ></a>
+            </div>
+        </fieldset>
+    </div>
+
+    <div id="audio-settings-section" style="<%= group.audio_enabled ? '' : 'display:none;' %>">
+        <h5 style="margin-top:1.5rem; margin-bottom:0.25rem">Audio Settings</h5>
+        <small class="section-desc">Configure how audio messages are processed and included in the AI's context.</small>
+        <div class="settings-grid" style="margin-top:0.5rem">
+            <div>
+                <label for="select-audio-mode">Audio History Mode</label>
+                <small class="field-desc">How audio messages are included in AI calls.</small>
+                <select id="select-audio-mode" data-group="<%= group.group_id %>" onchange="updateDropdown(this, 'audio_history_mode'); toggleAudioHistoryCount();">
+                    <option value="tagged" <%= (group.audio_history_mode || 'tagged') === 'tagged' ? 'selected' : '' %>>Tagged/Replied Only</option>
+                    <option value="history" <%= (group.audio_history_mode || 'tagged') === 'history' ? 'selected' : '' %>>Last X in History</option>
+                </select>
+            </div>
+            <div id="audio-history-count-container" style="<%= (group.audio_history_mode || 'tagged') === 'tagged' ? 'display:none;' : '' %>">
+                <label for="audio-history-count-input">Audio History Count</label>
+                <small class="field-desc">Number of recent audio messages to include. Leave empty for default (<%= defaultAudioHistoryCount %>).</small>
+                <div class="inline-form">
+                    <input type="number" id="audio-history-count-input" min="1" max="20" step="1"
+                        value="<%= group.audio_history_count != null && group.audio_history_count !== 1 ? group.audio_history_count : '' %>"
+                        placeholder="<%= defaultAudioHistoryCount %>">
+                    <button onclick="saveAudioHistoryCount('<%= group.group_id %>')">Save</button>
+                </div>
+            </div>
+        </div>
+        <div style="margin-top:0.75rem">
+            <label for="audio-duration-cap-input">Audio Duration Cap (seconds)</label>
+            <small class="field-desc">Max audio duration the bot will process. Leave empty for default (<%= defaultAudioDurationCap %>s). Set to 0 for no limit.</small>
+            <div class="inline-form">
+                <input type="number" id="audio-duration-cap-input" min="0" step="1"
+                    value="<%= group.audio_duration_cap != null && group.audio_duration_cap !== 900 ? group.audio_duration_cap : '' %>"
+                    placeholder="<%= defaultAudioDurationCap %>">
+                <button onclick="saveAudioDurationCap('<%= group.group_id %>')">Save</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="tts-settings-section" style="<%= group.tts_enabled ? '' : 'display:none;' %>">
+        <h5 style="margin-top:1.5rem; margin-bottom:0.25rem">Text-to-Speech Settings</h5>
+        <small class="section-desc">Voice and style are configured per persona in <a href="<%= basePath %>/settings#persona-<%= group.default_prompt_name || 'default' %>">Settings</a>.</small>
+        <div style="margin-top:0.5rem">
+            <label for="select-tts-trigger-mode">Trigger Mode</label>
+            <small class="field-desc">How TTS is triggered for this group.</small>
+            <select id="select-tts-trigger-mode" data-group="<%= group.group_id %>" onchange="updateDropdown(this, 'tts_trigger_mode')">
+                <option value="keyword" <%= (group.tts_trigger_mode || 'keyword') === 'keyword' ? 'selected' : '' %>>By Keyword</option>
+                <option value="always" <%= (group.tts_trigger_mode || 'keyword') === 'always' ? 'selected' : '' %>>Always</option>
+            </select>
+        </div>
+    </div>
+
+    <h5 style="margin-top:1.5rem; margin-bottom:0.25rem">Message History</h5>
+    <small class="section-desc">Number of recent messages sent to the AI. Leave empty to use the global default (<%= defaultHistoryLimit %>).</small>
+    <div class="inline-form">
+        <input type="number" id="history-limit-input" min="1" max="500" step="1"
+            value="<%= group.custom_message_limit || '' %>"
+            placeholder="<%= defaultHistoryLimit %>">
+        <button onclick="saveHistoryLimit('<%= group.group_id %>')">Save</button>
+    </div>
+
+    <label for="group-name-input" style="margin-top:1.5rem">Group Name</label>
+    <div class="inline-form">
+        <input type="text" id="group-name-input" value="<%= group.group_name || '' %>" placeholder="Group display name">
+        <button onclick="saveGroupName('<%= group.group_id %>')">Save</button>
+    </div>
+</article>
+
+<!-- Group Context -->
+<article>
+    <header><strong>Group Context</strong></header>
+    <small class="section-desc">Custom context injected into every AI response for this group.</small>
+    <textarea id="context-editor" class="context-editor" data-group="<%= group.group_id %>"><%= context %></textarea>
+    <button onclick="saveContext('<%= group.group_id %>')">Save Context</button>
+</article>
+
+<!-- Group Memories (auto-maintained by background processor) -->
+<article>
+    <header><strong>Group Memories</strong></header>
+    <small class="section-desc">Auto-maintained by the background processor. These are injected into the AI's context. You can also edit manually.</small>
+    <textarea id="memories-editor" class="context-editor" data-group="<%= group.group_id %>"><%= memories %></textarea>
+    <button onclick="saveMemories('<%= group.group_id %>')">Save Memories</button>
+</article>
+
+
+<!-- Usage -->
+<article>
+    <header><strong>Usage</strong></header>
+    <div style="margin-bottom:1rem">
+        <select id="usage-period" onchange="loadUsage('<%= group.group_id %>')" style="width:auto;display:inline-block">
+            <option value="7d">Last 7 days</option>
+            <option value="30d" selected>Last 30 days</option>
+            <option value="all">All time</option>
+        </select>
+    </div>
+    <div id="usage-content"><p aria-busy="true">Loading usage data…</p></div>
+</article>
+<script>
+async function loadUsage(groupId) {
+    const container = document.getElementById('usage-content');
+    const period = document.getElementById('usage-period').value;
+    container.innerHTML = '<p aria-busy="true">Loading usage data…</p>';
+    try {
+        const res = await fetch(`${BASE}/api/groups/${encodeURIComponent(groupId)}/usage?period=${period}`);
+        if (!res.ok) throw new Error('Failed');
+        const data = await res.json();
+
+        if (data.totals.call_count === 0) {
+            container.innerHTML = '<p><small>No usage data for this period.</small></p>';
+            return;
+        }
+
+        function fmt(n) { return n != null ? n.toLocaleString() : '0'; }
+        function fmtCost(n) { return n != null ? '$' + n.toFixed(4) : '$0.0000'; }
+
+        let html = '<h5 style="margin-bottom:0.25rem">Totals</h5>';
+        html += '<table><thead><tr><th>Calls</th><th>Input Tokens</th><th>Output Tokens</th><th>Cached Tokens</th><th>Est. Cost</th></tr></thead>';
+        html += `<tbody><tr><td>${fmt(data.totals.call_count)}</td><td>${fmt(data.totals.input_tokens)}</td><td>${fmt(data.totals.output_tokens)}</td><td>${fmt(data.totals.cached_tokens)}</td><td>${fmtCost(data.totals.cost_usd)}</td></tr></tbody></table>`;
+
+        if (data.byModel.length > 0) {
+            html += '<h5 style="margin-top:1.5rem;margin-bottom:0.25rem">By Model</h5>';
+            html += '<table><thead><tr><th>Model</th><th>Calls</th><th>Input</th><th>Output</th><th>Cached</th><th>Est. Cost</th></tr></thead><tbody>';
+            for (const row of data.byModel) {
+                html += `<tr><td>${row.ai_model || 'unknown'}</td><td>${fmt(row.call_count)}</td><td>${fmt(row.input_tokens)}</td><td>${fmt(row.output_tokens)}</td><td>${fmt(row.cached_tokens)}</td><td>${fmtCost(row.cost_usd)}</td></tr>`;
+            }
+            html += '</tbody></table>';
+        }
+
+        if (data.byUser.length > 0) {
+            html += '<h5 style="margin-top:1.5rem;margin-bottom:0.25rem">By User</h5>';
+            html += '<table><thead><tr><th>User</th><th>Calls</th><th>Input</th><th>Output</th><th>Cached</th><th>Est. Cost</th></tr></thead><tbody>';
+            for (const row of data.byUser) {
+                html += `<tr><td>${row.user_name}</td><td>${fmt(row.call_count)}</td><td>${fmt(row.input_tokens)}</td><td>${fmt(row.output_tokens)}</td><td>${fmt(row.cached_tokens)}</td><td>${fmtCost(row.cost_usd)}</td></tr>`;
+            }
+            html += '</tbody></table>';
+        }
+
+        container.innerHTML = html;
+    } catch (e) {
+        container.innerHTML = '<p style="color:#c62828">Failed to load usage data.</p>';
+    }
+}
+loadUsage('<%= group.group_id %>');
+</script>
+
+<% if (backgroundGlobalEnabled) { %>
+<!-- Background Processing -->
+<article>
+    <header>
+        <strong>Background Processing</strong>
+        <span style="display:inline-block; background:#e65100; color:#fff; font-size:0.7rem; padding:2px 8px; border-radius:4px; margin-left:0.5rem; vertical-align:middle;">Experimental</span>
+    </header>
+
+    <label>
+        <input type="checkbox" role="switch" id="toggle-background_processing_enabled"
+            data-group="<%= group.group_id %>" data-field="background_processing_enabled"
+            <%= group.background_processing_enabled !== 0 ? 'checked' : '' %>
+            onchange="toggleSetting(this)">
+        Enable Background Processing
+        <span class="info-icon">i<span class="info-tooltip">Automatically processes group messages in the background to build and maintain conversation memories. Runs after a debounce period or message threshold is reached.</span></span>
+    </label>
+
+    <div class="settings-grid" style="margin-top:1rem">
+        <div>
+            <label for="bg-debounce-input">Debounce Time (seconds)</label>
+            <small class="section-desc">Wait time before triggering. Leave empty to use the global default (<%= defaultDebounceSeconds %>).</small>
+            <div class="inline-form">
+                <input type="number" id="bg-debounce-input" min="10" step="1"
+                    value="<%= group.background_debounce_ms ? Math.round(group.background_debounce_ms / 1000) : '' %>"
+                    placeholder="<%= defaultDebounceSeconds %>">
+                <button onclick="saveGroupDebounce('<%= group.group_id %>')">Save</button>
+            </div>
+        </div>
+        <div>
+            <label for="bg-threshold-input">Message Threshold</label>
+            <small class="section-desc">Messages before triggering. Leave empty to use the global default (<%= defaultMessageThreshold %>).</small>
+            <div class="inline-form">
+                <input type="number" id="bg-threshold-input" min="1" step="1"
+                    value="<%= group.background_message_threshold || '' %>"
+                    placeholder="<%= defaultMessageThreshold %>">
+                <button onclick="saveGroupThreshold('<%= group.group_id %>')">Save</button>
+            </div>
+        </div>
+    </div>
+</article>
+<% } %>
+
+<%- include('footer') %>

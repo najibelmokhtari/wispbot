@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Admin Login</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css">
+    <style>
+        body { display: flex; justify-content: center; align-items: center; min-height: 100vh; }
+        .login-card { max-width: 400px; width: 100%; }
+    </style>
+</head>
+<body>
+    <article class="login-card">
+        <header>
+            <h3>WhatsApp Bot Admin</h3>
+        </header>
+        <% if (error) { %>
+            <p style="color: var(--pico-color-red-550);"><%= error %></p>
+        <% } %>
+        <form method="POST" action="<%= basePath %>/login">
+            <label for="password">Password</label>
+            <input type="password" id="password" name="password" required autofocus>
+            <button type="submit">Login</button>
+        </form>
+    </article>
+</body>
+</html>

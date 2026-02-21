@@ -1,0 +1,39 @@
+<%- include('layout') %>
+
+<h2>Connection</h2>
+
+<article id="connection-card">
+    <header>
+        <strong>WhatsApp Connection Status</strong>
+        <span id="status-badge" style="float:right; padding:0.2rem 0.75rem; border-radius:0.25rem; font-size:0.85rem;"></span>
+    </header>
+
+    <p id="status-message">Connecting to event stream...</p>
+
+    <!-- QR code (hidden when not needed) -->
+    <div id="qr-container" style="display:none; text-align:center; padding:1rem 0;">
+        <small class="field-desc">Scan this QR code with WhatsApp: <strong>Linked Devices &rarr; Link a Device</strong></small>
+        <canvas id="qr-canvas" style="max-width:280px; width:100%; image-rendering:pixelated;"></canvas>
+        <small class="field-desc" style="color:#999">QR code refreshes automatically</small>
+    </div>
+
+    <!-- Connected info (hidden when not connected) -->
+    <div id="connected-info" style="display:none;">
+        <p>Connected as: <strong id="connected-name"></strong></p>
+        <p>Phone: <strong id="connected-phone"></strong></p>
+        <button id="disconnect-btn" class="outline" style="color:#c62828; border-color:#c62828;" onclick="disconnectBot()">Disconnect</button>
+    </div>
+
+    <!-- Disconnected actions (hidden when not disconnected) -->
+    <div id="disconnected-info" style="display:none;">
+        <button id="connect-btn" class="outline" style="color:#2e7d32; border-color:#2e7d32;" onclick="connectBot()">Connect</button>
+    </div>
+
+    <!-- Loading progress (hidden when not loading) -->
+    <div id="loading-container" style="display:none;">
+        <progress id="loading-progress" value="0" max="100"></progress>
+        <p id="loading-message" style="color:#999;"></p>
+    </div>
+</article>
+
+<%- include('footer') %>

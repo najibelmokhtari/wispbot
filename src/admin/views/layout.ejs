@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WhatsApp Bot Admin</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css">
+    <style>
+        nav {
+            padding: 0.5rem 1rem;
+        }
+
+        .toggle-cell {
+            text-align: center;
+        }
+
+        .badge-on {
+            color: #2e7d32;
+            font-weight: bold;
+        }
+
+        .badge-off {
+            color: #999;
+        }
+
+        .toast {
+            position: fixed;
+            bottom: 1rem;
+            right: 1rem;
+            padding: 0.75rem 1.5rem;
+            border-radius: 0.5rem;
+            color: white;
+            z-index: 999;
+            opacity: 0;
+            transition: opacity 0.3s;
+        }
+
+        .toast.show {
+            opacity: 1;
+        }
+
+        .toast.success {
+            background: #2e7d32;
+        }
+
+        .toast.error {
+            background: #c62828;
+        }
+
+        .group-row {
+            cursor: pointer;
+        }
+
+        .group-row:hover {
+            opacity: 0.8;
+        }
+
+        .group-row.inactive {
+            opacity: 0.45;
+        }
+
+        .group-row.inactive:hover {
+            opacity: 0.65;
+        }
+
+        textarea.context-editor {
+            min-height: 200px;
+            font-family: monospace;
+            font-size: 0.85rem;
+        }
+
+        textarea.persona-editor {
+            min-height: 300px;
+            font-family: monospace;
+            font-size: 0.85rem;
+        }
+
+        .user-table td {
+            vertical-align: middle;
+        }
+
+        .inline-form {
+            display: flex;
+            gap: 0.5rem;
+            align-items: end;
+        }
+
+        .inline-form input {
+            margin-bottom: 0;
+        }
+
+        .settings-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 1rem;
+        }
+
+        @media (max-width: 768px) {
+            .settings-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        h3.section-heading {
+            background: #37474f;
+            color: #fff;
+            padding: 0.6rem 1rem;
+            border-radius: 6px;
+            font-size: 1.1rem;
+            margin-bottom: 1rem;
+        }
+
+
+        .action-btn {
+            margin: 0;
+            padding: 0.2rem 0.5rem;
+            font-size: 0.85rem;
+            line-height: 1;
+            display: inline-flex;
+            align-items: center;
+            cursor: pointer;
+        }
+
+        .actions-cell {
+            white-space: nowrap;
+        }
+
+        .actions-cell .action-btn + .action-btn {
+            margin-left: 0.25rem;
+        }
+
+        .inspect-row td {
+            padding: 0;
+        }
+
+        .inspect-panel {
+            padding: 0 1rem 1rem;
+        }
+
+        .inspect-panel .participant-list {
+            columns: 2;
+            column-gap: 1.5rem;
+            list-style: none;
+            padding: 0;
+            margin: 0.5rem 0;
+        }
+
+        .inspect-panel .participant-list li {
+            padding: 0.15rem 0;
+            font-size: 0.85rem;
+        }
+
+        .inspect-panel .admin-badge {
+            color: #1565c0;
+            font-weight: bold;
+            font-size: 0.75rem;
+        }
+
+        article > header {
+            background: #37474f;
+            color: #fff;
+        }
+
+        article > header strong {
+            color: #fff;
+        }
+
+        .section-desc {
+            display: block;
+            color: #666;
+            margin-top: 0.1rem;
+            margin-bottom: 0.75rem;
+        }
+
+        .field-desc {
+            display: block;
+            color: #666;
+            margin-top: -0.5rem;
+            margin-bottom: 0.4rem;
+        }
+
+        .info-icon {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 1.1em;
+            height: 1.1em;
+            border-radius: 50%;
+            border: 1.5px solid #888;
+            color: #888;
+            font-size: 0.7em;
+            font-weight: bold;
+            font-style: normal;
+            cursor: help;
+            margin-left: 0.35em;
+            vertical-align: middle;
+            position: relative;
+        }
+
+        .info-icon:hover {
+            border-color: #1565c0;
+            color: #1565c0;
+        }
+
+        .info-tooltip {
+            display: none;
+            position: absolute;
+            bottom: calc(100% + 8px);
+            left: 50%;
+            transform: translateX(-50%);
+            background: #333;
+            color: #fff;
+            padding: 0.5rem 0.75rem;
+            border-radius: 6px;
+            font-size: 0.8rem;
+            font-weight: normal;
+            white-space: normal;
+            width: 260px;
+            line-height: 1.4;
+            z-index: 100;
+            text-align: left;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+        }
+
+        .info-tooltip::after {
+            content: '';
+            position: absolute;
+            top: 100%;
+            left: 50%;
+            transform: translateX(-50%);
+            border: 6px solid transparent;
+            border-top-color: #333;
+        }
+
+        .info-icon:hover .info-tooltip {
+            display: block;
+        }
+    </style>
+</head>
+
+<body>
+    <nav>
+        <ul>
+            <li><strong>WhatsApp Bot Admin</strong></li>
+        </ul>
+        <ul>
+            <li><a href="<%= basePath %>/connection">Connection <span id="connection-status-label"
+                        style="font-size:0.85rem;"
+                        title="<%= botConnected ? 'Connected' : 'Disconnected' %>"><%= botConnected ? '✅' : '⚠️' %></span></a></li>
+            <li><a href="<%= basePath %>/groups">Chats</a></li>
+            <li><a href="<%= basePath %>/users">Users</a></li>
+            <li><a href="<%= basePath %>/settings">Settings</a></li>
+            <li>
+                <form method="POST" action="<%= basePath %>/logout" style="margin:0">
+                    <button type="submit" class="outline secondary"
+                        style="padding:0.25rem 0.75rem; margin:0">Logout</button>
+                </form>
+            </li>
+        </ul>
+    </nav>
+    <main class="container">

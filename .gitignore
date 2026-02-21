@@ -1,0 +1,43 @@
+# Dependencies
+node_modules/
+
+# Environment & secrets
+.env
+ecosystem.config.js
+
+# WhatsApp session data
+.wwebjs_auth/
+.wwebjs_cache/
+tokens/
+
+# Runtime data
+data/
+conversations/
+*.log
+
+# Personal files (do NOT commit these)
+authorized_numbers*.txt
+admin_numbers.txt
+
+# Temporary files
+temp_images/
+temp_audio/
+
+# Group-specific AI context files (contain personal information)
+# Keep the example template but ignore real group files
+prompts/group_contexts/*
+!prompts/group_contexts/example.txt
+
+# OS / IDE junk
+.DS_Store
+.idea/
+.claude/
+
+# Personal scripts & server shortcuts
+connect_prod.sh
+qrcode.sh
+
+# Test artifacts
+test-claude.js
+test-puppeteer.js
+*.wav

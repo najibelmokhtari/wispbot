@@ -1,0 +1,282 @@
+<%- include('layout') %>
+
+    <h2>Settings</h2>
+
+    <!-- Bot Identity -->
+    <article>
+        <header><strong>Bot Identity</strong></header>
+        <% if (settings.bot_number) { %>
+            <p style="margin-bottom:0"><strong>WhatsApp Number:</strong> +<%= settings.bot_number %></p>
+            <small style="display:block; color:#999; margin-top:-0.25rem"><%= settings.bot_user_id || '' %></small>
+        <% } else { %>
+            <p style="color:#e65100; margin-bottom:0">Not connected yet. <a href="<%= basePath %>/connection">Go to Connection
+                    page</a> to scan the QR code.</p>
+        <% } %>
+
+        <label for="bot-name-input" style="margin-top:1.5rem">Bot Display Name</label>
+        <small class="field-desc">The bot's name in conversation logs, mentions, and WhatsApp profile. Max 25 characters.</small>
+        <div class="inline-form">
+            <input type="text" id="bot-name-input" value="<%= settings.bot_name || '' %>"
+                placeholder="e.g. GeminiAI" maxlength="25">
+            <button onclick="saveBotName()">Save</button>
+        </div>
+
+        <label for="tts-trigger-input" style="margin-top:1.5rem">Text-To-Speech Trigger Tag</label>
+        <small class="field-desc">The tag users include in their message to request an audio response.</small>
+        <div class="inline-form">
+            <input type="text" id="tts-trigger-input" value="<%= settings.tts_trigger || '$aa' %>"
+                placeholder="e.g. $aa">
+            <button onclick="saveTtsTrigger()">Save</button>
+        </div>
+    </article>
+
+    <!-- Defaults for New Groups -->
+    <article>
+        <header><strong>Defaults for New Groups</strong></header>
+        <small class="section-desc">These settings are applied when a new group or DM is activated.</small>
+
+        <div class="settings-grid">
+            <fieldset>
+                <label>
+                    <input type="checkbox" role="switch" id="default-google_search"
+                        <%=(settings.default_google_search || '1')==='1' ? 'checked' : '' %>
+                    onchange="updateDefaultToggle('default_google_search', this.checked)">
+                    Google Search
+                    <span class="info-icon">i<span class="info-tooltip">Allows the AI to search Google for up-to-date information when answering questions. The AI decides automatically when a search would be helpful.</span></span>
+                </label>
+                <label>
+                    <input type="checkbox" role="switch" id="default-audio"
+                        <%=(settings.default_audio || '1')==='1' ? 'checked' : '' %>
+                    onchange="updateDefaultToggle('default_audio', this.checked)">
+                    Audio Processing
+                    <span class="info-icon">i<span class="info-tooltip">When enabled, the bot transcribes voice messages and audio files sent in the chat, and includes the transcription in the AI's context. When disabled, audio messages are ignored.</span></span>
+                </label>
+                <label>
+                    <input type="checkbox" role="switch" id="default-tts"
+                        <%=(settings.default_tts || '1')==='1' ? 'checked' : '' %>
+                    onchange="updateDefaultToggle('default_tts', this.checked)">
+                    Text-to-Speech
+                    <span class="info-icon">i<span class="info-tooltip">Allows users to receive the bot's response as a voice message. Triggered when a user includes the Text-To-Speech trigger tag (configured above) in their message.</span></span>
+                </label>
+                <label>
+                    <input type="checkbox" role="switch" id="default-auth_check"
+                        <%=settings.default_auth_check==='1' ? 'checked' : '' %>
+                    onchange="updateDefaultToggle('default_auth_check', this.checked)">
+                    Authorization Check
+                    <span class="info-icon">i<span class="info-tooltip">When enabled, only authorized users and admins can invoke the bot in this chat. Unauthorized users are silently ignored. Manage authorized users from the Users page.</span></span>
+                </label>
+            </fieldset>
+            <fieldset>
+                <label for="default-model">Default AI Model</label>
+                <select id="default-model" onchange="updateDefaultDropdown('default_ai_model', this.value)">
+                    <% for (const [key, info] of Object.entries(models)) { %>
+                        <option value="<%= key %>" <%=(settings.default_ai_model || 'gemini-2.5-pro' )===key
+                            ? 'selected' : '' %>><%= info.displayName %>
+                        </option>
+                        <% } %>
+                </select>
+                <label for="default-persona">Default Persona</label>
+                <div style="display:flex; gap:0.5rem; align-items:center;">
+                    <select id="default-persona" onchange="updateDefaultDropdown('default_persona', this.value)" style="margin-bottom:0">
+                        <% for (const p of personas) { %>
+                            <option value="<%= p %>" <%=(settings.default_persona || 'default' )===p ? 'selected' : '' %>>
+                                <%= p %>
+                            </option>
+                            <% } %>
+                    </select>
+                    <a id="edit-default-persona-link" href="#persona-<%= settings.default_persona || 'default' %>" class="outline secondary" role="button" style="white-space:nowrap; padding:0.5rem 0.75rem; font-size:0.85rem;<%= (settings.default_persona || 'default') === 'default' ? ' display:none;' : '' %>">Edit Persona ></a>
+                </div>
+                <label for="default-history-limit">Message History Limit</label>
+                <small class="field-desc">Number of recent messages sent to the AI for context. Per-group overrides can be set on each group's page.</small>
+                <div class="inline-form">
+                    <input type="number" id="default-history-limit" min="1" max="500" step="1"
+                        value="<%= settings.default_message_history_limit || '20' %>"
+                        placeholder="20">
+                    <button onclick="saveDefaultHistoryLimit()">Save</button>
+                </div>
+            </fieldset>
+        </div>
+
+        <h5 style="margin-top:1.5rem; margin-bottom:0.25rem">Audio Processing Defaults</h5>
+        <small class="section-desc">Configure how audio messages are processed by default for new groups.</small>
+        <div class="settings-grid" style="margin-top:0.5rem">
+            <fieldset>
+                <label for="default-audio-history-mode">Audio History Mode</label>
+                <small class="field-desc">How audio messages are included in AI calls.</small>
+                <select id="default-audio-history-mode" onchange="updateDefaultDropdown('default_audio_history_mode', this.value); toggleDefaultAudioHistoryCount();">
+                    <option value="tagged" <%= (settings.default_audio_history_mode || 'tagged') === 'tagged' ? 'selected' : '' %>>Tagged/Replied Only</option>
+                    <option value="history" <%= (settings.default_audio_history_mode || 'tagged') === 'history' ? 'selected' : '' %>>Last X in History</option>
+                </select>
+                <div id="default-audio-history-count-container" style="<%= (settings.default_audio_history_mode || 'tagged') === 'tagged' ? 'display:none;' : '' %>">
+                    <label for="default-audio-history-count">Audio History Count</label>
+                    <small class="field-desc">Number of recent audio messages to include in AI context.</small>
+                    <div class="inline-form">
+                        <input type="number" id="default-audio-history-count" min="1" max="20" step="1"
+                            value="<%= settings.default_audio_history_count || '1' %>"
+                            placeholder="1">
+                        <button onclick="saveDefaultAudioHistoryCount()">Save</button>
+                    </div>
+                </div>
+            </fieldset>
+            <div>
+                <label for="default-audio-duration-cap">Audio Duration Cap (seconds)</label>
+                <small class="field-desc">Max audio duration the bot will process. Set to 0 for no limit.</small>
+                <div class="inline-form">
+                    <input type="number" id="default-audio-duration-cap" min="0" step="1"
+                        value="<%= settings.default_audio_duration_cap || '900' %>"
+                        placeholder="900">
+                    <button onclick="saveDefaultAudioDurationCap()">Save</button>
+                </div>
+            </div>
+        </div>
+
+        <h5 style="margin-top:1.5rem; margin-bottom:0.25rem">Text-to-Speech Defaults</h5>
+        <small class="section-desc">Voice and style are configured per persona below. This section controls trigger behavior for new groups.</small>
+        <div style="margin-top:0.5rem">
+            <label for="default-tts-trigger-mode">Default TTS Trigger Mode</label>
+            <small class="field-desc">How TTS is triggered by default for new groups.</small>
+            <select id="default-tts-trigger-mode" onchange="updateDefaultDropdown('default_tts_trigger_mode', this.value)">
+                <option value="keyword" <%= (settings.default_tts_trigger_mode || 'keyword') === 'keyword' ? 'selected' : '' %>>By Keyword</option>
+                <option value="always" <%= (settings.default_tts_trigger_mode || 'keyword') === 'always' ? 'selected' : '' %>>Always</option>
+            </select>
+        </div>
+
+    </article>
+
+    <!-- System Prompts -->
+    <article>
+        <header><strong>System Prompts</strong></header>
+        <small class="section-desc">These prompt blocks are used by the bot when composing messages to the AI. Changes take effect immediately.</small>
+
+        <div id="system-prompt-list">
+            <% for (const sp of systemPrompts) { %>
+                <details id="sysprompt-detail-<%= sp.name %>">
+                    <summary onclick="loadSystemPrompt('<%= sp.name %>')">
+                        <%= sp.displayName %>
+                        <br><small style="color:#666"><%= sp.description %></small>
+                    </summary>
+                    <textarea id="sysprompt-content-<%= sp.name %>" class="persona-editor" placeholder="Loading..."></textarea>
+                    <button onclick="saveSystemPrompt('<%= sp.name %>')">Save</button>
+                </details>
+            <% } %>
+        </div>
+    </article>
+
+    <!-- Persona Management -->
+    <article>
+        <header><strong>Persona Management</strong></header>
+        <small class="section-desc">Create, edit, and delete personas. These are the system prompts that define the bot's personality.</small>
+
+        <div id="persona-list">
+            <% for (const p of personas) { %>
+                <details id="persona-detail-<%= p %>" ontoggle="if(this.open) loadPersonaContent('<%= p %>')">
+                    <summary><%= p %></summary>
+                    <% if (p === 'default') { %>
+                        <small class="field-desc">The default persona uses only the <strong>Base Instructions</strong> system prompt (editable above) with no additional persona prompt.</small>
+                    <% } %>
+                    <% if (p !== 'default') { %>
+                        <textarea id="persona-content-<%= p %>" class="persona-editor" placeholder="Loading..."></textarea>
+                        <button onclick="savePersonaFromSettings('<%= p %>')" style="margin-bottom:1rem">Save Persona Prompt</button>
+                    <% } %>
+
+                    <h6 style="margin-top:1rem; margin-bottom:0.25rem">TTS Voice</h6>
+                    <small class="field-desc">The voice used when this persona speaks.<%= p === 'default' ? ' This is the fallback voice for all personas without a custom voice.' : '' %></small>
+                    <select id="persona-tts-voice-<%= p %>" onchange="savePersonaTtsVoice('<%= p %>', this.value)" style="margin-top:0.25rem">
+                        <% if (p !== 'default') { %>
+                        <option value="">Use Default Persona Voice</option>
+                        <% } %>
+                        <optgroup label="Female">
+                            <% for (const v of ttsVoices.filter(v => v.gender === 'female')) { %>
+                            <option value="<%= v.id %>"><%= v.name %> — <%= v.description %></option>
+                            <% } %>
+                        </optgroup>
+                        <optgroup label="Male">
+                            <% for (const v of ttsVoices.filter(v => v.gender === 'male')) { %>
+                            <option value="<%= v.id %>"><%= v.name %> — <%= v.description %></option>
+                            <% } %>
+                        </optgroup>
+                    </select>
+
+                    <h6 style="margin-top:1rem; margin-bottom:0.25rem">TTS Style Prompt</h6>
+                    <small class="field-desc">Instructions for how this persona should speak (tone, accent, mannerisms).<%= p === 'default' ? ' This is the fallback style for personas without a custom TTS prompt.' : ' Leave empty to use the default style.' %></small>
+                    <textarea id="persona-tts-style-<%= p %>" class="persona-editor" placeholder="Loading..." style="margin-top:0.25rem"></textarea>
+                    <div style="display:flex; gap:0.5rem; align-items:center;">
+                        <button onclick="savePersonaTtsStyle('<%= p %>')">Save TTS Style</button>
+                        <% if (p !== 'default') { %>
+                        <button class="outline secondary" onclick="deletePersona('<%= p %>')" style="color:#c62828; border-color:#c62828;">Delete Persona</button>
+                        <% } %>
+                    </div>
+                </details>
+                <% } %>
+        </div>
+
+        <hr>
+        <h4>Create New Persona</h4>
+        <div class="inline-form" style="margin-bottom: 0.5rem">
+            <input type="text" id="new-persona-name" placeholder="persona_name (lowercase, underscores)"
+                pattern="[a-z0-9_]+" maxlength="30">
+            <button onclick="createNewPersona()">Create</button>
+        </div>
+        <textarea id="new-persona-content" class="persona-editor"
+            placeholder="Enter the system prompt for this persona..."></textarea>
+    </article>
+
+    <!-- Background Processing -->
+    <article>
+        <header>
+            <strong>Background Processing</strong>
+            <span style="display:inline-block; background:#e65100; color:#fff; font-size:0.7rem; padding:2px 8px; border-radius:4px; margin-left:0.5rem; vertical-align:middle;">Experimental</span>
+        </header>
+        <small class="section-desc">Background processing silently observes group messages and builds conversation memories using a separate AI call. This is an experimental feature and may behave unexpectedly.</small>
+
+        <label>
+            <input type="checkbox" role="switch" id="background-global-enabled"
+                <%=(settings.background_processing_global || '0')==='1' ? 'checked' : '' %>
+                onchange="updateDefaultToggle('background_processing_global', this.checked)">
+            Enable Background Processing
+            <span class="info-icon">i<span class="info-tooltip">Master switch for background processing. When disabled, no background processing will run for any group, regardless of per-group settings.</span></span>
+        </label>
+
+        <div class="settings-grid" style="margin-top:1rem">
+            <fieldset>
+                <label>
+                    <input type="checkbox" role="switch" id="default-background_processing"
+                        <%=settings.default_background_processing==='1' ? 'checked' : '' %>
+                        onchange="updateDefaultToggle('default_background_processing', this.checked)">
+                    Enable by Default for New Groups
+                    <span class="info-icon">i<span class="info-tooltip">When enabled, background processing will be turned on automatically for newly activated groups.</span></span>
+                </label>
+            </fieldset>
+            <div>
+                <label for="background-ai-model">Background AI Model</label>
+                <select id="background-ai-model" onchange="updateDefaultDropdown('background_ai_model', this.value)">
+                    <% for (const [key, info] of Object.entries(models)) { %>
+                        <option value="<%= key %>" <%=(settings.background_ai_model || 'gemini-3-flash-preview')===key ? 'selected' : '' %>><%= info.displayName %></option>
+                    <% } %>
+                </select>
+            </div>
+        </div>
+
+        <h5 style="margin-top:1.5rem; margin-bottom:0.25rem">Debounce Settings</h5>
+        <small class="section-desc">Controls when background processing triggers. Per-group overrides can be set on each group's page.</small>
+        <div class="settings-grid">
+            <div>
+                <label for="default-bg-debounce">Debounce Time (seconds)</label>
+                <div class="inline-form">
+                    <input type="number" id="default-bg-debounce" min="10" step="1"
+                        value="<%= settings.default_background_debounce_ms ? Math.round(settings.default_background_debounce_ms / 1000) : '300' %>">
+                    <button onclick="saveDefaultDebounce()">Save</button>
+                </div>
+            </div>
+            <div>
+                <label for="default-bg-threshold">Message Threshold</label>
+                <div class="inline-form">
+                    <input type="number" id="default-bg-threshold" min="1" step="1"
+                        value="<%= settings.default_background_message_threshold || '20' %>">
+                    <button onclick="saveDefaultThreshold()">Save</button>
+                </div>
+            </div>
+        </div>
+    </article>
+
+    <%- include('footer') %>

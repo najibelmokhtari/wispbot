@@ -1,0 +1,11 @@
+This is an example group context file. Create one file per group at:
+  prompts/group_contexts/<whatsapp_group_id>.txt
+
+The content is free-form text that gives the AI background about the group.
+It is injected into the system prompt so the bot can be more relevant and personalized.
+
+Example content:
+
+This group is called "Dev Team". It's a group of software engineers working on a startup.
+Members are based in multiple countries and speak English and French.
+The group is used for technical discussions, code reviews, and coordination.

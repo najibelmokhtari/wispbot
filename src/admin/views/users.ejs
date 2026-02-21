@@ -1,0 +1,106 @@
+<%- include('layout') %>
+
+<h2>User Management</h2>
+
+<!-- Authorized Users -->
+<article>
+    <header><strong>Authorized Users (<%= authorized.length %>)</strong></header>
+    <div class="inline-form" style="margin-bottom:1rem">
+        <input type="text" id="add-authorized-input" placeholder="Phone number with International Code (e.g. +212600000000)" style="flex:1">
+        <button onclick="addUser('authorized')">Add</button>
+    </div>
+    <% if (authorized.length === 0) { %>
+        <p>No authorized users.</p>
+    <% } else { %>
+    <figure>
+    <table class="user-table">
+        <thead>
+            <tr><th>Phone</th><th>Name</th><th></th></tr>
+        </thead>
+        <tbody>
+            <% for (const u of authorized) { %>
+            <tr>
+                <td><small><%= u.phone || u.id %></small></td>
+                <td><%= u.name || '-' %></td>
+                <td><button class="outline secondary" style="padding:0.2rem 0.5rem; margin:0" onclick="removeUser('authorized', '<%= u.id %>')">Remove</button></td>
+            </tr>
+            <% } %>
+        </tbody>
+    </table>
+    </figure>
+    <% } %>
+</article>
+
+<!-- Admin Users -->
+<article>
+    <header><strong>Bot Admins (<%= admins.length %>)</strong></header>
+    <div class="inline-form" style="margin-bottom:1rem">
+        <input type="text" id="add-admin-input" placeholder="Phone number with International Code (e.g. +212600000000)" style="flex:1">
+        <button onclick="addUser('admin')">Add</button>
+    </div>
+    <% if (admins.length === 0) { %>
+        <p>No bot admins.</p>
+    <% } else { %>
+    <figure>
+    <table class="user-table">
+        <thead>
+            <tr><th>Phone</th><th>Name</th><th></th></tr>
+        </thead>
+        <tbody>
+            <% for (const u of admins) { %>
+            <tr>
+                <td><small><%= u.phone || u.id %></small></td>
+                <td><%= u.name || '-' %></td>
+                <td><button class="outline secondary" style="padding:0.2rem 0.5rem; margin:0" onclick="removeUser('admin', '<%= u.id %>')">Remove</button></td>
+            </tr>
+            <% } %>
+        </tbody>
+    </table>
+    </figure>
+    <% } %>
+</article>
+
+<!-- Pending Add Requests -->
+<article>
+    <header>
+        <strong>Pending Add Requests (<%= addRequests.length %>)</strong>
+        <% if (addRequests.length > 0) { %>
+            <button class="outline" style="padding:0.2rem 0.75rem; margin:0; float:right" onclick="acceptAllRequests()">Accept All</button>
+        <% } %>
+    </header>
+    <% if (addRequests.length === 0) { %>
+        <p>No pending requests.</p>
+    <% } else { %>
+    <figure>
+    <table class="user-table">
+        <thead>
+            <tr><th>Phone</th><th>Name</th><th></th></tr>
+        </thead>
+        <tbody>
+            <% for (const r of addRequests) { %>
+            <tr id="request-<%= r.user_id.replace(/[^a-zA-Z0-9]/g, '_') %>">
+                <td><small><%= r.user_id.replace(/@c\.us$/, '') %></small></td>
+                <td><%= r.user_name %></td>
+                <td>
+                    <button style="padding:0.2rem 0.5rem; margin:0" onclick="acceptRequest('<%= r.user_id %>')">Accept</button>
+                    <button class="outline secondary" style="padding:0.2rem 0.5rem; margin:0" onclick="rejectRequest('<%= r.user_id %>')">Reject</button>
+                </td>
+            </tr>
+            <% } %>
+        </tbody>
+    </table>
+    </figure>
+    <% } %>
+</article>
+
+<!-- Known Users Search -->
+<article>
+    <header><strong>Search Known Users</strong></header>
+    <small class="section-desc">Search the bot's database for users it has seen. Useful for finding user IDs to add.</small>
+    <div class="inline-form" style="margin-bottom:1rem">
+        <input type="text" id="search-users-input" placeholder="Search by name or ID..." style="flex:1" oninput="searchUsers(this.value)">
+    </div>
+    <div id="search-results"></div>
+</article>
+
+<%- include('footer') %>
