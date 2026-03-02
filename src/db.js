@@ -57,7 +57,8 @@ async function initializeDatabase(retries = MAX_RETRIES) {
         last_processed_timestamp TEXT,
         google_search_enabled INTEGER DEFAULT 1,
         audio_enabled INTEGER DEFAULT 1,
-        ai_model TEXT DEFAULT 'gemini-2.5-pro',
+        image_enabled INTEGER DEFAULT 1,
+        ai_model TEXT DEFAULT 'gemini-3.1-pro-preview',
         authorization_check_enabled INTEGER DEFAULT 0,
         tts_enabled INTEGER DEFAULT 1,
         is_active INTEGER DEFAULT 0
@@ -99,6 +100,13 @@ async function initializeDatabase(retries = MAX_RETRIES) {
     // Migration: Add audio_enabled column if it doesn't exist (for existing DBs)
     try {
       await db.exec('ALTER TABLE group_info ADD COLUMN audio_enabled INTEGER DEFAULT 1');
+    } catch (error) {
+      // Column likely exists, ignore error
+    }
+
+    // Migration: Add image_enabled column if it doesn't exist (for existing DBs)
+    try {
+      await db.exec('ALTER TABLE group_info ADD COLUMN image_enabled INTEGER DEFAULT 1');
     } catch (error) {
       // Column likely exists, ignore error
     }
@@ -216,9 +224,76 @@ async function initializeDatabase(retries = MAX_RETRIES) {
       // Column likely exists, ignore error
     }
 
-    // Migration: Add TTS trigger mode column ('keyword' or 'always')
+    // Migration: Add TTS trigger mode column ('tag' or 'always')
     try {
       await db.exec("ALTER TABLE group_info ADD COLUMN tts_trigger_mode TEXT DEFAULT NULL");
+    } catch (error) {
+      // Column likely exists, ignore error
+    }
+
+    // Migration: Rename tts_trigger_mode value 'keyword' -> 'tag'
+    try {
+      await db.exec("UPDATE group_info SET tts_trigger_mode = 'tag' WHERE tts_trigger_mode = 'keyword'");
+      await db.exec("UPDATE bot_settings SET value = 'tag' WHERE key = 'default_tts_trigger_mode' AND value = 'keyword'");
+    } catch (error) {
+      // Ignore migration errors
+    }
+
+    // Migration: Add usage_reset_date column to group_info
+    try {
+      await db.exec("ALTER TABLE group_info ADD COLUMN usage_reset_date TEXT DEFAULT NULL");
+    } catch (error) {
+      // Column likely exists, ignore error
+    }
+
+    // Migration: Add active listening columns to group_info
+    try {
+      await db.exec('ALTER TABLE group_info ADD COLUMN active_listening_enabled INTEGER DEFAULT 0');
+    } catch (error) {
+      // Column likely exists, ignore error
+    }
+    try {
+      await db.exec('ALTER TABLE group_info ADD COLUMN active_listening_throttle_ms INTEGER DEFAULT NULL');
+    } catch (error) {
+      // Column likely exists, ignore error
+    }
+    try {
+      await db.exec('ALTER TABLE group_info ADD COLUMN active_listening_context_count INTEGER DEFAULT NULL');
+    } catch (error) {
+      // Column likely exists, ignore error
+    }
+    try {
+      await db.exec('ALTER TABLE group_info ADD COLUMN active_listening_prompt TEXT DEFAULT NULL');
+    } catch (error) {
+      // Column likely exists, ignore error
+    }
+    try {
+      await db.exec('ALTER TABLE group_info ADD COLUMN active_listening_send_audio INTEGER DEFAULT NULL');
+    } catch (error) {
+      // Column likely exists, ignore error
+    }
+    try {
+      await db.exec('ALTER TABLE group_info ADD COLUMN active_listening_send_images INTEGER DEFAULT NULL');
+    } catch (error) {
+      // Column likely exists, ignore error
+    }
+    try {
+      await db.exec('ALTER TABLE group_info ADD COLUMN active_listening_audio_count INTEGER DEFAULT NULL');
+    } catch (error) {
+      // Column likely exists, ignore error
+    }
+    try {
+      await db.exec('ALTER TABLE group_info ADD COLUMN active_listening_image_count INTEGER DEFAULT NULL');
+    } catch (error) {
+      // Column likely exists, ignore error
+    }
+    try {
+      await db.exec("ALTER TABLE group_info ADD COLUMN image_history_mode TEXT DEFAULT 'tagged'");
+    } catch (error) {
+      // Column likely exists, ignore error
+    }
+    try {
+      await db.exec('ALTER TABLE group_info ADD COLUMN image_history_count INTEGER DEFAULT 1');
     } catch (error) {
       // Column likely exists, ignore error
     }
@@ -287,9 +362,10 @@ async function getOrCreateGroupInfo(groupId, groupName) {
 
     // Use admin-configured defaults from bot_settings, falling back to hardcoded defaults
     const defaultPersona = await getBotSetting('default_persona') || 'default';
-    const defaultModel = await getBotSetting('default_ai_model') || 'gemini-2.5-pro';
+    const defaultModel = await getBotSetting('default_ai_model') || 'gemini-3.1-pro-preview';
     const defaultSearch = parseInt(await getBotSetting('default_google_search') || '1');
     const defaultAudio = parseInt(await getBotSetting('default_audio') || '1');
+    const defaultImage = parseInt(await getBotSetting('default_image') || '1');
     const defaultTts = parseInt(await getBotSetting('default_tts') || '1');
     const defaultAuth = parseInt(await getBotSetting('default_auth_check') || '0');
     const defaultBgProcessing = parseInt(await getBotSetting('default_background_processing') || '0');
@@ -299,11 +375,25 @@ async function getOrCreateGroupInfo(groupId, groupName) {
     const defaultAudioHistoryCount = parseInt(await getBotSetting('default_audio_history_count') || '1');
     const defaultAudioDurationCap = await getBotSetting('default_audio_duration_cap');
     const audioDurationCap = defaultAudioDurationCap !== null ? parseInt(defaultAudioDurationCap) : 900;
-    const defaultTtsTriggerMode = await getBotSetting('default_tts_trigger_mode') || 'keyword';
+    const defaultTtsTriggerMode = await getBotSetting('default_tts_trigger_mode') || 'tag';
+    const botActivationMode = await getBotSetting('bot_activation_mode') || 'manual';
+    const defaultActiveListening = botActivationMode === 'active_listening' ? 1 : 0;
+    const defaultActiveListeningThrottleMs = await getBotSetting('default_active_listening_throttle_ms') || null;
+    const defaultActiveListeningContextCount = await getBotSetting('default_active_listening_context_count') || null;
+    const defaultAlSendAudio = await getBotSetting('default_al_send_audio');
+    const alSendAudio = defaultAlSendAudio !== null ? parseInt(defaultAlSendAudio) : null;
+    const defaultAlSendImages = await getBotSetting('default_al_send_images');
+    const alSendImages = defaultAlSendImages !== null ? parseInt(defaultAlSendImages) : null;
+    const defaultAlAudioCount = await getBotSetting('default_al_audio_count');
+    const alAudioCount = defaultAlAudioCount !== null ? parseInt(defaultAlAudioCount) : null;
+    const defaultAlImageCount = await getBotSetting('default_al_image_count');
+    const alImageCount = defaultAlImageCount !== null ? parseInt(defaultAlImageCount) : null;
+    const defaultImageHistoryMode = await getBotSetting('default_image_history_mode') || 'tagged';
+    const defaultImageHistoryCount = parseInt(await getBotSetting('default_image_history_count') || '1');
 
     await db.run(
-      'INSERT INTO group_info (group_id, group_name, group_summary, default_prompt_name, google_search_enabled, audio_enabled, ai_model, authorization_check_enabled, tts_enabled, custom_message_limit, is_active, background_processing_enabled, background_debounce_ms, background_message_threshold, audio_history_mode, audio_history_count, audio_duration_cap, tts_trigger_mode) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-      [groupId, groupName, defaultSummary, defaultPersona, defaultSearch, defaultAudio, defaultModel, defaultAuth, defaultTts, null, 0, defaultBgProcessing, defaultBgDebounceMs ? parseInt(defaultBgDebounceMs) : null, defaultBgMsgThreshold ? parseInt(defaultBgMsgThreshold) : null, defaultAudioHistoryMode, defaultAudioHistoryCount, audioDurationCap, defaultTtsTriggerMode]
+      'INSERT INTO group_info (group_id, group_name, group_summary, default_prompt_name, google_search_enabled, audio_enabled, image_enabled, ai_model, authorization_check_enabled, tts_enabled, custom_message_limit, is_active, background_processing_enabled, background_debounce_ms, background_message_threshold, audio_history_mode, audio_history_count, audio_duration_cap, tts_trigger_mode, active_listening_enabled, active_listening_throttle_ms, active_listening_context_count, active_listening_send_audio, active_listening_send_images, active_listening_audio_count, active_listening_image_count, image_history_mode, image_history_count) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      [groupId, groupName, defaultSummary, defaultPersona, defaultSearch, defaultAudio, defaultImage, defaultModel, defaultAuth, defaultTts, null, 0, defaultBgProcessing, defaultBgDebounceMs ? parseInt(defaultBgDebounceMs) : null, defaultBgMsgThreshold ? parseInt(defaultBgMsgThreshold) : null, defaultAudioHistoryMode, defaultAudioHistoryCount, audioDurationCap, defaultTtsTriggerMode, defaultActiveListening, defaultActiveListeningThrottleMs ? parseInt(defaultActiveListeningThrottleMs) : null, defaultActiveListeningContextCount ? parseInt(defaultActiveListeningContextCount) : null, alSendAudio, alSendImages, alAudioCount, alImageCount, defaultImageHistoryMode, defaultImageHistoryCount]
     );
 
     groupInfo = await db.get('SELECT * FROM group_info WHERE group_id = ?', groupId);
@@ -312,14 +402,38 @@ async function getOrCreateGroupInfo(groupId, groupName) {
   return groupInfo;
 }
 
+const ALLOWED_GROUP_COLUMNS = new Set([
+  'group_name', 'group_summary', 'default_prompt_name', 'last_processed_timestamp',
+  'google_search_enabled', 'audio_enabled', 'image_enabled', 'ai_model',
+  'authorization_check_enabled', 'tts_enabled', 'is_active',
+  'custom_message_limit', 'background_processing_enabled',
+  'background_debounce_ms', 'background_message_threshold',
+  'audio_history_mode', 'audio_history_count', 'audio_duration_cap',
+  'tts_trigger_mode', 'usage_reset_date',
+  'active_listening_enabled', 'active_listening_throttle_ms',
+  'active_listening_context_count', 'active_listening_prompt',
+  'active_listening_send_audio', 'active_listening_send_images',
+  'active_listening_audio_count', 'active_listening_image_count',
+  'image_history_mode', 'image_history_count',
+]);
+
 async function updateGroupInfo(groupId, updateData) {
   const db = await getDatabase();
   const updates = [];
   const values = [];
 
   for (const [key, value] of Object.entries(updateData)) {
+    if (!ALLOWED_GROUP_COLUMNS.has(key)) {
+      logger.warn('DB', `Rejected unknown column "${key}" in updateGroupInfo`);
+      continue;
+    }
     updates.push(`${key} = ?`);
     values.push(value);
+  }
+
+  if (updates.length === 0) {
+    logger.warn('DB', `No valid columns to update for group ${groupId}`);
+    return false;
   }
 
   values.push(groupId);
@@ -566,11 +680,19 @@ async function importAuthFromFiles(authorizedFile, adminFile) {
   return { authorized: authorizedCount, admin: adminCount };
 }
 
-process.on('SIGINT', async () => {
-  logger.info('DB', 'Closing database connection...');
-  await closeDatabase();
-  process.exit(0);
-});
+async function getConversationMessages(groupId, limit = 100, offset = 0) {
+  const db = await getDatabase();
+  return await db.all(
+    'SELECT * FROM conversations WHERE group_id = ? ORDER BY timestamp ASC LIMIT ? OFFSET ?',
+    [groupId, limit, offset]
+  );
+}
+
+async function getConversationCount(groupId) {
+  const db = await getDatabase();
+  const row = await db.get('SELECT COUNT(*) as count FROM conversations WHERE group_id = ?', groupId);
+  return row.count;
+}
 
 module.exports = {
   getDatabase,
@@ -600,5 +722,7 @@ module.exports = {
   getAuthorizedUsersWithNames,
   getAdminUsersWithNames,
   importAuthFromFiles,
-  validateUserId
+  validateUserId,
+  getConversationMessages,
+  getConversationCount
 };

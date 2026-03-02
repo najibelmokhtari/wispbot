@@ -13,12 +13,13 @@ const {
     isUserAuthorized,
     isUserAdmin: isUserBotAdmin,
     getBotSetting,
-    getDatabase
+    getDatabase,
+    getConversationMessages,
+    getConversationCount
 } = require('../../db');
 const { AVAILABLE_MODELS } = require('../../pricing-config');
 
 const config = require('../../config');
-const { parsePersonaFile, serializePersona } = require('../../persona-parser');
 
 const PERSONAS_DIR = path.join(__dirname, '..', '..', '..', 'prompts', 'personas');
 const GROUP_CONTEXTS_DIR = path.join(__dirname, '..', '..', '..', 'prompts', 'group_contexts');
@@ -35,25 +36,6 @@ async function getPersonaNames() {
     return ['default', ...names];
 }
 
-// Helper: read and parse a .persona file
-async function readPersona(name) {
-    const filePath = path.join(PERSONAS_DIR, `${name}.persona`);
-    const raw = await fs.readFile(filePath, 'utf8');
-    return parsePersonaFile(raw);
-}
-
-// Helper: read, update a field, and write back a .persona file
-async function updatePersonaField(name, field, value) {
-    let persona;
-    try {
-        persona = await readPersona(name);
-    } catch {
-        persona = { voice: '', systemPrompt: '', ttsStyle: '' };
-    }
-    persona[field] = value;
-    await fs.writeFile(path.join(PERSONAS_DIR, `${name}.persona`), serializePersona(persona), 'utf8');
-}
-
 // Helper: validate and resolve group context path
 function getContextPath(groupId) {
     if (!/^[\w@.\-]+$/.test(groupId)) return null;
@@ -61,6 +43,18 @@ function getContextPath(groupId) {
     if (!resolved.startsWith(path.resolve(GROUP_CONTEXTS_DIR))) return null;
     return resolved;
 }
+
+// API: list current group/DM IDs (for polling new-chat detection)
+router.get('/api/groups/ids', async (req, res) => {
+    try {
+        const active = await getActiveGroups();
+        const inactive = await getInactiveGroups();
+        const ids = [...active, ...inactive].map(g => g.group_id);
+        res.json({ ids });
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to fetch group IDs' });
+    }
+});
 
 // Groups list page
 router.get('/groups', async (req, res) => {
@@ -94,7 +88,9 @@ router.get('/groups', async (req, res) => {
             }
         }
 
-        res.render('groups', { groups, dms, unconfiguredGroups, unconfiguredDms, personas, models: AVAILABLE_MODELS });
+        const backgroundGlobalEnabled = (await getBotSetting('background_processing_global')) === '1';
+
+        res.render('groups', { groups, dms, unconfiguredGroups, unconfiguredDms, personas, models: AVAILABLE_MODELS, backgroundGlobalEnabled });
     } catch (error) {
         logger.error('Admin', 'Error loading groups: ' + error.message);
         res.status(500).send('Error loading groups');
@@ -134,10 +130,19 @@ router.get('/groups/:groupId', async (req, res) => {
         const defaultDebounceSeconds = Math.round(config.backgroundDebounceMs / 1000);
         const defaultMessageThreshold = config.backgroundMessageThreshold;
         const backgroundGlobalEnabled = (await getBotSetting('background_processing_global')) === '1';
+        const defaultActiveListeningThrottle = await getBotSetting('default_active_listening_throttle_ms') || String(config.activeListeningThrottleMs);
+        const defaultActiveListeningContextCount = await getBotSetting('default_active_listening_context_count') || String(config.activeListeningContextCount);
+        const defaultAlSendAudio = await getBotSetting('default_al_send_audio') || '0';
+        const defaultAlSendImages = await getBotSetting('default_al_send_images') || '0';
+        const defaultAlAudioCount = await getBotSetting('default_al_audio_count') || '3';
+        const defaultAlImageCount = await getBotSetting('default_al_image_count') || '3';
         const defaultAudioHistoryMode = await getBotSetting('default_audio_history_mode') || 'tagged';
         const defaultAudioHistoryCount = await getBotSetting('default_audio_history_count') || '1';
         const defaultAudioDurationCap = await getBotSetting('default_audio_duration_cap') || '900';
-        const defaultTtsTriggerMode = await getBotSetting('default_tts_trigger_mode') || 'keyword';
+        const defaultImageHistoryMode = await getBotSetting('default_image_history_mode') || 'tagged';
+        const defaultImageHistoryCount = await getBotSetting('default_image_history_count') || '1';
+        const defaultTtsTriggerMode = await getBotSetting('default_tts_trigger_mode') || 'tag';
+        const ttsTrigger = await getBotSetting('tts_trigger') || '$audio';
 
         res.render('group-detail', {
             group: groupInfo,
@@ -149,10 +154,19 @@ router.get('/groups/:groupId', async (req, res) => {
             defaultDebounceSeconds,
             defaultMessageThreshold,
             backgroundGlobalEnabled,
+            defaultActiveListeningThrottle: Math.round(parseInt(defaultActiveListeningThrottle) / 1000),
+            defaultActiveListeningContextCount,
+            defaultAlSendAudio,
+            defaultAlSendImages,
+            defaultAlAudioCount,
+            defaultAlImageCount,
             defaultAudioHistoryMode,
             defaultAudioHistoryCount,
             defaultAudioDurationCap,
-            defaultTtsTriggerMode
+            defaultImageHistoryMode,
+            defaultImageHistoryCount,
+            defaultTtsTriggerMode,
+            ttsTrigger
         });
     } catch (error) {
         logger.error('Admin', 'Error loading group detail: ' + error.message);
@@ -165,12 +179,17 @@ router.post('/api/groups/:groupId/settings', async (req, res) => {
     try {
         const groupId = req.params.groupId;
         const allowed = [
-            'google_search_enabled', 'audio_enabled', 'tts_enabled',
+            'google_search_enabled', 'audio_enabled', 'image_enabled', 'tts_enabled',
             'authorization_check_enabled', 'ai_model', 'default_prompt_name',
             'group_name', 'background_processing_enabled',
             'background_debounce_ms', 'background_message_threshold',
             'custom_message_limit', 'audio_history_mode', 'audio_history_count',
-            'audio_duration_cap', 'tts_trigger_mode'
+            'audio_duration_cap', 'image_history_mode', 'image_history_count',
+            'tts_trigger_mode',
+            'active_listening_enabled', 'active_listening_throttle_ms',
+            'active_listening_context_count', 'active_listening_prompt',
+            'active_listening_send_audio', 'active_listening_send_images',
+            'active_listening_audio_count', 'active_listening_image_count'
         ];
         const updateData = {};
         for (const key of allowed) {
@@ -181,7 +200,29 @@ router.post('/api/groups/:groupId/settings', async (req, res) => {
         if (Object.keys(updateData).length === 0) {
             return res.status(400).json({ error: 'No valid fields to update' });
         }
+
+        // Check if persona is being switched — read old value before updating
+        let oldPersona = null;
+        if (updateData.default_prompt_name) {
+            const groupInfo = await getOrCreateGroupInfo(groupId, groupId);
+            oldPersona = groupInfo.default_prompt_name || 'default';
+        }
+
         await updateGroupInfo(groupId, updateData);
+
+        // Announce persona switch to the group
+        if (updateData.default_prompt_name && oldPersona !== updateData.default_prompt_name) {
+            const client = req.sharedState?.whatsappClient;
+            if (client) {
+                const newPersona = updateData.default_prompt_name;
+                try {
+                    await client.sendMessage(groupId, `Persona switched from *${oldPersona}* to *${newPersona}* (via portal).`);
+                } catch (e) {
+                    logger.warn('Admin', `Failed to announce persona switch in ${groupId}: ${e.message}`);
+                }
+            }
+        }
+
         res.json({ success: true });
     } catch (error) {
         logger.error('Admin', 'Error updating group settings: ' + error.message);
@@ -259,124 +300,40 @@ router.post('/api/groups/:groupId/memories', async (req, res) => {
     }
 });
 
-// API: list personas
-router.get('/api/personas', async (req, res) => {
-    try {
-        const names = await getPersonaNames();
-        res.json(names);
-    } catch (error) {
-        res.status(500).json({ error: 'Failed to list personas' });
-    }
-});
-
-// API: get persona content
-router.get('/api/personas/:name', async (req, res) => {
-    try {
-        const name = req.params.name;
-        if (!/^[a-z0-9_]+$/.test(name)) return res.status(400).json({ error: 'Invalid persona name' });
-        if (name === 'default') return res.json({ content: '' });
-        const persona = await readPersona(name);
-        res.json({ content: persona.systemPrompt });
-    } catch (error) {
-        res.status(404).json({ error: 'Persona not found' });
-    }
-});
-
-// API: save persona content
-router.post('/api/personas/:name', async (req, res) => {
-    try {
-        const name = req.params.name;
-        if (!/^[a-z0-9_]+$/.test(name)) return res.status(400).json({ error: 'Invalid persona name' });
-        if (name.length > 30) return res.status(400).json({ error: 'Persona name must be 30 characters or less' });
-        if (name === 'default') return res.status(400).json({ error: 'Cannot edit the default persona (it uses base instructions only)' });
-        await updatePersonaField(name, 'systemPrompt', req.body.content || '');
-        res.json({ success: true });
-    } catch (error) {
-        logger.error('Admin', 'Error saving persona: ' + error.message);
-        res.status(500).json({ error: 'Failed to save persona' });
-    }
-});
-
-// API: delete persona
-router.delete('/api/personas/:name', async (req, res) => {
-    try {
-        const name = req.params.name;
-        if (name === 'default') return res.status(400).json({ error: 'Cannot delete the default persona' });
-        if (!/^[a-z0-9_]+$/.test(name)) return res.status(400).json({ error: 'Invalid persona name' });
-        await fs.unlink(path.join(PERSONAS_DIR, `${name}.persona`));
-        res.json({ success: true });
-    } catch (error) {
-        if (error.code === 'ENOENT') return res.status(404).json({ error: 'Persona not found' });
-        logger.error('Admin', 'Error deleting persona: ' + error.message);
-        res.status(500).json({ error: 'Failed to delete persona' });
-    }
-});
-
-// API: get persona TTS settings (voice + style prompt)
-router.get('/api/personas/:name/tts', async (req, res) => {
-    try {
-        const name = req.params.name;
-        if (!/^[a-z0-9_]+$/.test(name)) return res.status(400).json({ error: 'Invalid persona name' });
-        const persona = await readPersona(name);
-        res.json({ voice: persona.voice, stylePrompt: persona.ttsStyle });
-    } catch (error) {
-        res.json({ voice: '', stylePrompt: '' });
-    }
-});
-
-// API: save persona TTS voice
-router.post('/api/personas/:name/tts/voice', async (req, res) => {
-    try {
-        const name = req.params.name;
-        if (!/^[a-z0-9_]+$/.test(name)) return res.status(400).json({ error: 'Invalid persona name' });
-        await updatePersonaField(name, 'voice', (req.body.voice || '').trim());
-
-        if (req.sharedState?.messageQueueManager) {
-            await req.sharedState.messageQueueManager.reloadPrompt(name === 'default' ? 'base' : name);
-        }
-        res.json({ success: true });
-    } catch (error) {
-        logger.error('Admin', `Error saving persona TTS voice: ${error.message}`);
-        res.status(500).json({ error: 'Failed to save TTS voice' });
-    }
-});
-
-// API: save persona TTS style prompt
-router.post('/api/personas/:name/tts/style', async (req, res) => {
-    try {
-        const name = req.params.name;
-        if (!/^[a-z0-9_]+$/.test(name)) return res.status(400).json({ error: 'Invalid persona name' });
-        await updatePersonaField(name, 'ttsStyle', req.body.content || '');
-
-        if (req.sharedState?.messageQueueManager) {
-            await req.sharedState.messageQueueManager.reloadPrompt(name === 'default' ? 'base' : name);
-        }
-        res.json({ success: true });
-    } catch (error) {
-        logger.error('Admin', `Error saving persona TTS style: ${error.message}`);
-        res.status(500).json({ error: 'Failed to save TTS style prompt' });
-    }
-});
-
 // API: get group usage stats
 router.get('/api/groups/:groupId/usage', async (req, res) => {
     try {
         const groupId = req.params.groupId;
         const period = req.query.period || '30d';
 
-        let startDate;
+        // Format date as 'YYYY-MM-DD HH:MM:SS' to match SQLite's CURRENT_TIMESTAMP format
+        function toSqliteDate(d) {
+            return d.getUTCFullYear() + '-' +
+                String(d.getUTCMonth() + 1).padStart(2, '0') + '-' +
+                String(d.getUTCDate()).padStart(2, '0') + ' ' +
+                String(d.getUTCHours()).padStart(2, '0') + ':' +
+                String(d.getUTCMinutes()).padStart(2, '0') + ':' +
+                String(d.getUTCSeconds()).padStart(2, '0');
+        }
+
+        let startDateStr;
         const now = new Date();
         if (period === '7d') {
-            startDate = new Date(now - 7 * 24 * 60 * 60 * 1000);
+            startDateStr = toSqliteDate(new Date(now - 7 * 24 * 60 * 60 * 1000));
         } else if (period === '30d') {
-            startDate = new Date(now - 30 * 24 * 60 * 60 * 1000);
+            startDateStr = toSqliteDate(new Date(now - 30 * 24 * 60 * 60 * 1000));
+        } else if (period === 'since_reset') {
+            const groupInfo = await getOrCreateGroupInfo(groupId, '');
+            startDateStr = groupInfo.usage_reset_date
+                ? toSqliteDate(new Date(groupInfo.usage_reset_date))
+                : '2000-01-01 00:00:00';
         } else {
-            startDate = new Date('2000-01-01');
+            startDateStr = '2000-01-01 00:00:00';
         }
 
         const db = await getDatabase();
 
-        // Per-model totals
+        // Per-model totals (including TTS cost breakdown)
         const byModel = await db.all(`
             SELECT
                 ai_model,
@@ -384,12 +341,13 @@ router.get('/api/groups/:groupId/usage', async (req, res) => {
                 SUM(input_tokens) as input_tokens,
                 SUM(output_tokens) as output_tokens,
                 SUM(cached_tokens) as cached_tokens,
-                SUM(cost_usd) as cost_usd
-            FROM claude_api_calls
+                SUM(cost_usd) as cost_usd,
+                SUM(COALESCE(tts_cost_usd, 0)) as tts_cost_usd
+            FROM llm_api_calls
             WHERE group_id = ? AND timestamp >= ?
             GROUP BY ai_model
             ORDER BY cost_usd DESC
-        `, [groupId, startDate.toISOString()]);
+        `, [groupId, startDateStr]);
 
         // Per-user totals
         const byUser = await db.all(`
@@ -399,22 +357,27 @@ router.get('/api/groups/:groupId/usage', async (req, res) => {
                 SUM(input_tokens) as input_tokens,
                 SUM(output_tokens) as output_tokens,
                 SUM(cached_tokens) as cached_tokens,
-                SUM(cost_usd) as cost_usd
-            FROM claude_api_calls
+                SUM(cost_usd) as cost_usd,
+                SUM(COALESCE(tts_cost_usd, 0)) as tts_cost_usd
+            FROM llm_api_calls
             WHERE group_id = ? AND timestamp >= ?
             GROUP BY user_id
             ORDER BY cost_usd DESC
-        `, [groupId, startDate.toISOString()]);
+        `, [groupId, startDateStr]);
 
         // Resolve user names
         for (const row of byUser) {
-            const name = await getUserNameById(row.user_id);
-            row.user_name = name || row.user_id.replace(/@c\.us$/, '');
+            if (row.user_id === 'background-processor') {
+                row.user_name = 'Background Processing';
+            } else {
+                const name = await getUserNameById(row.user_id);
+                row.user_name = name || row.user_id.replace(/@c\.us$/, '');
+            }
         }
 
         // Grand totals
         const totals = {
-            call_count: 0, input_tokens: 0, output_tokens: 0, cached_tokens: 0, cost_usd: 0
+            call_count: 0, input_tokens: 0, output_tokens: 0, cached_tokens: 0, cost_usd: 0, tts_cost_usd: 0
         };
         for (const row of byModel) {
             totals.call_count += row.call_count || 0;
@@ -422,12 +385,37 @@ router.get('/api/groups/:groupId/usage', async (req, res) => {
             totals.output_tokens += row.output_tokens || 0;
             totals.cached_tokens += row.cached_tokens || 0;
             totals.cost_usd += row.cost_usd || 0;
+            totals.tts_cost_usd += row.tts_cost_usd || 0;
         }
 
-        res.json({ byModel, byUser, totals });
+        // Get reset date for the UI
+        const groupInfo = await getOrCreateGroupInfo(groupId, '');
+        const resetDate = groupInfo.usage_reset_date || null;
+
+        res.json({ byModel, byUser, totals, resetDate });
     } catch (error) {
         logger.error('Admin', 'Error fetching group usage: ' + error.message);
         res.status(500).json({ error: 'Failed to fetch usage data' });
+    }
+});
+
+// API: reset usage counter for a group
+router.post('/api/groups/:groupId/usage/reset', async (req, res) => {
+    try {
+        const groupId = req.params.groupId;
+        // Store in SQLite CURRENT_TIMESTAMP format for consistent comparisons
+        const now = new Date();
+        const resetDate = now.getUTCFullYear() + '-' +
+            String(now.getUTCMonth() + 1).padStart(2, '0') + '-' +
+            String(now.getUTCDate()).padStart(2, '0') + ' ' +
+            String(now.getUTCHours()).padStart(2, '0') + ':' +
+            String(now.getUTCMinutes()).padStart(2, '0') + ':' +
+            String(now.getUTCSeconds()).padStart(2, '0');
+        await updateGroupInfo(groupId, { usage_reset_date: resetDate });
+        res.json({ success: true });
+    } catch (error) {
+        logger.error('Admin', 'Error resetting usage counter: ' + error.message);
+        res.status(500).json({ error: 'Failed to reset usage counter' });
     }
 });
 
@@ -464,33 +452,44 @@ router.get('/api/groups/:groupId/whatsapp-info', async (req, res) => {
             return res.status(503).json({ error: 'WhatsApp client not available' });
         }
 
-        // Check if the client's browser page is still alive
-        if (!client.pupPage || client.pupPage.isClosed()) {
+        // Use getChatById from the adapter (which calls sock.groupMetadata)
+        let chat;
+        try {
+            chat = await client.getChatById(groupId);
+        } catch (e) {
             return res.status(503).json({ error: 'WhatsApp client session is not active. Try reconnecting.' });
         }
 
-        const chat = await client.getChatById(groupId);
         if (!chat || !chat.isGroup) {
             return res.status(404).json({ error: 'Group not found on WhatsApp' });
         }
 
         // Get participant details
+        const resolveLid = req.sharedState?.resolveLid || ((jid) => jid);
         const participants = [];
         if (chat.participants) {
             for (const p of chat.participants) {
-                let name = p.id._serialized;
+                const rawId = p.id._serialized;
+                // Resolve LID to phone number if mapping exists
+                const pId = resolveLid(rawId);
+                const phoneNumber = pId.split('@')[0];
+                // Try to get profile name from DB
+                let profileName = null;
                 try {
-                    const contact = await client.getContactById(p.id._serialized);
-                    name = contact.pushname || contact.name || p.id._serialized;
+                    profileName = await getUserNameById(pId);
+                    if (!profileName && rawId !== pId) {
+                        profileName = await getUserNameById(rawId);
+                    }
                 } catch (e) {
-                    // Use raw ID if contact lookup fails
+                    // No profile name available
                 }
-                const authorized = await isUserAuthorized(p.id._serialized);
-                const botAdmin = await isUserBotAdmin(p.id._serialized);
-                const isBot = p.id._serialized === config.botUserId || p.id._serialized === config.botLidUserId;
+                const authorized = await isUserAuthorized(pId) || (rawId !== pId && await isUserAuthorized(rawId));
+                const botAdmin = await isUserBotAdmin(pId) || (rawId !== pId && await isUserBotAdmin(rawId));
+                const isBot = pId === config.botUserId || rawId === config.botUserId;
                 participants.push({
-                    id: p.id._serialized,
-                    name: name,
+                    id: pId,
+                    name: profileName || null,
+                    phone: phoneNumber,
                     isAdmin: p.isAdmin || false,
                     isSuperAdmin: p.isSuperAdmin || false,
                     isAuthorized: authorized,
@@ -516,6 +515,34 @@ router.get('/api/groups/:groupId/whatsapp-info', async (req, res) => {
     } catch (error) {
         logger.error('Admin', 'Error fetching WhatsApp info: ' + error.message);
         res.status(500).json({ error: 'Failed to fetch WhatsApp info' });
+    }
+});
+
+// Chat viewer page
+router.get('/groups/:groupId/chat', async (req, res) => {
+    try {
+        const groupId = req.params.groupId;
+        const groupInfo = await getOrCreateGroupInfo(groupId, groupId);
+        const groupName = groupInfo.group_name || groupId;
+        res.render('chat-viewer', { groupId, groupName, botName: config.botName, botUserId: config.botUserId });
+    } catch (error) {
+        logger.error('Admin', 'Error loading chat viewer: ' + error.message);
+        res.status(500).send('Error loading chat viewer');
+    }
+});
+
+// API: get conversation messages (paginated)
+router.get('/api/groups/:groupId/messages', async (req, res) => {
+    try {
+        const groupId = req.params.groupId;
+        const limit = Math.min(parseInt(req.query.limit) || 100, 500);
+        const offset = parseInt(req.query.offset) || 0;
+        const messages = await getConversationMessages(groupId, limit, offset);
+        const total = await getConversationCount(groupId);
+        res.json({ messages, total });
+    } catch (error) {
+        logger.error('Admin', 'Error fetching messages: ' + error.message);
+        res.status(500).json({ error: 'Failed to fetch messages' });
     }
 });
 

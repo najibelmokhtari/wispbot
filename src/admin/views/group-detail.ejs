@@ -24,7 +24,15 @@
                     <%= group.audio_enabled ? 'checked' : '' %>
                     onchange="toggleSetting(this)">
                 Audio Processing
-                <span class="info-icon">i<span class="info-tooltip">When enabled, the bot transcribes voice messages and audio files sent in the chat, and includes the transcription in the AI's context. When disabled, audio messages are ignored.</span></span>
+                <span class="info-icon">i<span class="info-tooltip">When enabled, the bot includes voice memos in the AI's context. When disabled, audio messages are ignored.</span></span>
+            </label>
+            <label>
+                <input type="checkbox" role="switch" id="toggle-image_enabled"
+                    data-group="<%= group.group_id %>" data-field="image_enabled"
+                    <%= group.image_enabled ? 'checked' : '' %>
+                    onchange="toggleSetting(this)">
+                Image Processing
+                <span class="info-icon">i<span class="info-tooltip">When enabled, the bot includes images in the AI's context. When disabled, images are ignored.</span></span>
             </label>
             <label>
                 <input type="checkbox" role="switch" id="toggle-tts_enabled"
@@ -42,12 +50,21 @@
                 Authorization Check
                 <span class="info-icon">i<span class="info-tooltip">When enabled, only authorized users and admins can invoke the bot in this chat. Unauthorized users are silently ignored. Manage authorized users from the Users page.</span></span>
             </label>
+            <label>
+                <input type="checkbox" role="switch" id="toggle-active_listening_enabled"
+                    data-group="<%= group.group_id %>" data-field="active_listening_enabled"
+                    <%= group.active_listening_enabled !== 0 ? 'checked' : '' %>
+                    onchange="toggleSetting(this)"
+                >
+                Active Listening
+                <span class="info-icon">i<span class="info-tooltip">When enabled, a fast LLM evaluates each message and decides whether the bot should respond — without being tagged.</span></span>
+            </label>
         </fieldset>
         <fieldset>
             <label for="select-model">AI Model</label>
             <select id="select-model" data-group="<%= group.group_id %>" onchange="updateDropdown(this, 'ai_model')">
                 <% for (const [key, info] of Object.entries(models)) { %>
-                <option value="<%= key %>" <%= (group.ai_model || 'gemini-2.5-pro') === key ? 'selected' : '' %>><%= info.displayName %></option>
+                <option value="<%= key %>" <%= (group.ai_model || 'gemini-3.1-pro-preview') === key ? 'selected' : '' %>><%= info.displayName %></option>
                 <% } %>
             </select>
             <label for="select-persona">Persona</label>
@@ -57,7 +74,7 @@
                     <option value="<%= p %>" <%= (group.default_prompt_name || 'default') === p ? 'selected' : '' %>><%= p %></option>
                     <% } %>
                 </select>
-                <a id="edit-persona-link" href="<%= basePath %>/settings#persona-<%= group.default_prompt_name || 'default' %>" class="outline secondary" role="button" style="white-space:nowrap; padding:0.5rem 0.75rem; font-size:0.85rem;<%= (group.default_prompt_name || 'default') === 'default' ? ' display:none;' : '' %>">Edit Persona ></a>
+                <a id="edit-persona-link" href="<%= basePath %>/personas#persona-<%= group.default_prompt_name || 'default' %>" class="outline secondary" role="button" style="white-space:nowrap; padding:0.5rem 0.75rem; font-size:0.85rem;<%= (group.default_prompt_name || 'default') === 'default' ? ' display:none;' : '' %>">Edit Persona ></a>
             </div>
         </fieldset>
     </div>
@@ -97,15 +114,40 @@
         </div>
     </div>
 
+    <div id="image-settings-section" style="<%= group.image_enabled ? '' : 'display:none;' %>">
+        <h5 style="margin-top:1.5rem; margin-bottom:0.25rem">Image Settings</h5>
+        <small class="section-desc">Configure how images are processed and included in the AI's context.</small>
+        <div class="settings-grid" style="margin-top:0.5rem">
+            <div>
+                <label for="select-image-mode">Image History Mode</label>
+                <small class="field-desc">How images are included in AI calls.</small>
+                <select id="select-image-mode" data-group="<%= group.group_id %>" onchange="updateDropdown(this, 'image_history_mode'); toggleImageHistoryCount();">
+                    <option value="tagged" <%= (group.image_history_mode || 'tagged') === 'tagged' ? 'selected' : '' %>>Tagged/Replied Only</option>
+                    <option value="history" <%= (group.image_history_mode || 'tagged') === 'history' ? 'selected' : '' %>>Last X in History</option>
+                </select>
+            </div>
+            <div id="image-history-count-container" style="<%= (group.image_history_mode || 'tagged') === 'tagged' ? 'display:none;' : '' %>">
+                <label for="image-history-count-input">Image History Count</label>
+                <small class="field-desc">Number of recent images to include. Leave empty for default (<%= defaultImageHistoryCount %>).</small>
+                <div class="inline-form">
+                    <input type="number" id="image-history-count-input" min="1" max="20" step="1"
+                        value="<%= group.image_history_count != null && group.image_history_count !== 1 ? group.image_history_count : '' %>"
+                        placeholder="<%= defaultImageHistoryCount %>">
+                    <button onclick="saveImageHistoryCount('<%= group.group_id %>')">Save</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <div id="tts-settings-section" style="<%= group.tts_enabled ? '' : 'display:none;' %>">
         <h5 style="margin-top:1.5rem; margin-bottom:0.25rem">Text-to-Speech Settings</h5>
-        <small class="section-desc">Voice and style are configured per persona in <a href="<%= basePath %>/settings#persona-<%= group.default_prompt_name || 'default' %>">Settings</a>.</small>
+        <small class="section-desc">Voice and style are configured per persona in <a href="<%= basePath %>/personas#persona-<%= group.default_prompt_name || 'default' %>">Settings</a>.</small>
         <div style="margin-top:0.5rem">
             <label for="select-tts-trigger-mode">Trigger Mode</label>
-            <small class="field-desc">How TTS is triggered for this group.</small>
+            <small class="field-desc">How TTS is triggered for this group. "By Tag" means the user must include <code><%= ttsTrigger %></code> in their message.</small>
             <select id="select-tts-trigger-mode" data-group="<%= group.group_id %>" onchange="updateDropdown(this, 'tts_trigger_mode')">
-                <option value="keyword" <%= (group.tts_trigger_mode || 'keyword') === 'keyword' ? 'selected' : '' %>>By Keyword</option>
-                <option value="always" <%= (group.tts_trigger_mode || 'keyword') === 'always' ? 'selected' : '' %>>Always</option>
+                <option value="tag" <%= (group.tts_trigger_mode || 'tag') === 'tag' ? 'selected' : '' %>>By Tag</option>
+                <option value="always" <%= (group.tts_trigger_mode || 'tag') === 'always' ? 'selected' : '' %>>Always</option>
             </select>
         </div>
     </div>
@@ -130,93 +172,28 @@
 <article>
     <header><strong>Group Context</strong></header>
     <small class="section-desc">Custom context injected into every AI response for this group.</small>
-    <textarea id="context-editor" class="context-editor" data-group="<%= group.group_id %>"><%= context %></textarea>
-    <button onclick="saveContext('<%= group.group_id %>')">Save Context</button>
-</article>
-
-<!-- Group Memories (auto-maintained by background processor) -->
-<article>
-    <header><strong>Group Memories</strong></header>
-    <small class="section-desc">Auto-maintained by the background processor. These are injected into the AI's context. You can also edit manually.</small>
-    <textarea id="memories-editor" class="context-editor" data-group="<%= group.group_id %>"><%= memories %></textarea>
-    <button onclick="saveMemories('<%= group.group_id %>')">Save Memories</button>
+    <textarea id="context-editor" class="context-editor" data-group="<%= group.group_id %>" data-save-btn="btn-save-context"><%= context %></textarea>
+    <button id="btn-save-context" onclick="saveContext('<%= group.group_id %>')" disabled>Save Context</button>
 </article>
 
 
-<!-- Usage -->
+<!-- Memories -->
 <article>
-    <header><strong>Usage</strong></header>
-    <div style="margin-bottom:1rem">
-        <select id="usage-period" onchange="loadUsage('<%= group.group_id %>')" style="width:auto;display:inline-block">
-            <option value="7d">Last 7 days</option>
-            <option value="30d" selected>Last 30 days</option>
-            <option value="all">All time</option>
-        </select>
-    </div>
-    <div id="usage-content"><p aria-busy="true">Loading usage data…</p></div>
-</article>
-<script>
-async function loadUsage(groupId) {
-    const container = document.getElementById('usage-content');
-    const period = document.getElementById('usage-period').value;
-    container.innerHTML = '<p aria-busy="true">Loading usage data…</p>';
-    try {
-        const res = await fetch(`${BASE}/api/groups/${encodeURIComponent(groupId)}/usage?period=${period}`);
-        if (!res.ok) throw new Error('Failed');
-        const data = await res.json();
+    <header><strong>Memories</strong></header>
 
-        if (data.totals.call_count === 0) {
-            container.innerHTML = '<p><small>No usage data for this period.</small></p>';
-            return;
-        }
-
-        function fmt(n) { return n != null ? n.toLocaleString() : '0'; }
-        function fmtCost(n) { return n != null ? '$' + n.toFixed(4) : '$0.0000'; }
-
-        let html = '<h5 style="margin-bottom:0.25rem">Totals</h5>';
-        html += '<table><thead><tr><th>Calls</th><th>Input Tokens</th><th>Output Tokens</th><th>Cached Tokens</th><th>Est. Cost</th></tr></thead>';
-        html += `<tbody><tr><td>${fmt(data.totals.call_count)}</td><td>${fmt(data.totals.input_tokens)}</td><td>${fmt(data.totals.output_tokens)}</td><td>${fmt(data.totals.cached_tokens)}</td><td>${fmtCost(data.totals.cost_usd)}</td></tr></tbody></table>`;
-
-        if (data.byModel.length > 0) {
-            html += '<h5 style="margin-top:1.5rem;margin-bottom:0.25rem">By Model</h5>';
-            html += '<table><thead><tr><th>Model</th><th>Calls</th><th>Input</th><th>Output</th><th>Cached</th><th>Est. Cost</th></tr></thead><tbody>';
-            for (const row of data.byModel) {
-                html += `<tr><td>${row.ai_model || 'unknown'}</td><td>${fmt(row.call_count)}</td><td>${fmt(row.input_tokens)}</td><td>${fmt(row.output_tokens)}</td><td>${fmt(row.cached_tokens)}</td><td>${fmtCost(row.cost_usd)}</td></tr>`;
-            }
-            html += '</tbody></table>';
-        }
-
-        if (data.byUser.length > 0) {
-            html += '<h5 style="margin-top:1.5rem;margin-bottom:0.25rem">By User</h5>';
-            html += '<table><thead><tr><th>User</th><th>Calls</th><th>Input</th><th>Output</th><th>Cached</th><th>Est. Cost</th></tr></thead><tbody>';
-            for (const row of data.byUser) {
-                html += `<tr><td>${row.user_name}</td><td>${fmt(row.call_count)}</td><td>${fmt(row.input_tokens)}</td><td>${fmt(row.output_tokens)}</td><td>${fmt(row.cached_tokens)}</td><td>${fmtCost(row.cost_usd)}</td></tr>`;
-            }
-            html += '</tbody></table>';
-        }
-
-        container.innerHTML = html;
-    } catch (e) {
-        container.innerHTML = '<p style="color:#c62828">Failed to load usage data.</p>';
-    }
-}
-loadUsage('<%= group.group_id %>');
-</script>
-
-<% if (backgroundGlobalEnabled) { %>
-<!-- Background Processing -->
-<article>
-    <header>
-        <strong>Background Processing</strong>
-        <span style="display:inline-block; background:#e65100; color:#fff; font-size:0.7rem; padding:2px 8px; border-radius:4px; margin-left:0.5rem; vertical-align:middle;">Experimental</span>
-    </header>
+    <div class="<%= backgroundGlobalEnabled ? '' : 'section-disabled-wrapper' %>">
+    <% if (!backgroundGlobalEnabled) { %>
+        <div class="section-disabled-overlay">
+            <span class="disabled-tooltip">Enable Memories from the global Settings page to use this feature</span>
+        </div>
+    <% } %>
 
     <label>
         <input type="checkbox" role="switch" id="toggle-background_processing_enabled"
             data-group="<%= group.group_id %>" data-field="background_processing_enabled"
             <%= group.background_processing_enabled !== 0 ? 'checked' : '' %>
             onchange="toggleSetting(this)">
-        Enable Background Processing
+        Enable Memories
         <span class="info-icon">i<span class="info-tooltip">Automatically processes group messages in the background to build and maintain conversation memories. Runs after a debounce period or message threshold is reached.</span></span>
     </label>
 
@@ -242,7 +219,97 @@ loadUsage('<%= group.group_id %>');
             </div>
         </div>
     </div>
+
+    <h5 style="margin-top:1.5rem; margin-bottom:0.25rem">Stored Memories</h5>
+    <small class="section-desc">Auto-maintained by the memories feature. These are injected into the AI's context. You can also edit manually.</small>
+    <textarea id="memories-editor" class="context-editor" data-group="<%= group.group_id %>" data-save-btn="btn-save-memories"><%= memories %></textarea>
+    <button id="btn-save-memories" onclick="saveMemories('<%= group.group_id %>')" disabled>Save Memories</button>
+    </div>
 </article>
-<% } %>
+
+<!-- Active Listening -->
+<article id="active-listening-section">
+    <header><strong>Active Listening</strong></header>
+
+    <div class="<%= group.active_listening_enabled === 0 ? 'section-disabled-wrapper' : '' %>" id="active-listening-content">
+    <% if (group.active_listening_enabled === 0) { %>
+        <div class="section-disabled-overlay" id="al-disabled-overlay">
+            <span class="disabled-tooltip">Enable Active Listening above to configure these settings</span>
+        </div>
+    <% } %>
+
+    <div class="settings-grid" style="margin-top:1rem">
+        <div>
+            <label for="al-throttle-input">Throttle Time (seconds)</label>
+            <small class="section-desc">Minimum time between proactive responses. Leave empty to use the global default (<%= defaultActiveListeningThrottle %>s).</small>
+            <div class="inline-form">
+                <input type="number" id="al-throttle-input" min="1" step="1"
+                    value="<%= group.active_listening_throttle_ms ? Math.round(group.active_listening_throttle_ms / 1000) : '' %>"
+                    placeholder="<%= defaultActiveListeningThrottle %>">
+                <button onclick="saveGroupActiveListeningThrottle('<%= group.group_id %>')">Save</button>
+            </div>
+        </div>
+        <div>
+            <label for="al-context-count-input">Context Messages</label>
+            <small class="section-desc">Recent messages sent to the fast LLM. Leave empty to use the global default (<%= defaultActiveListeningContextCount %>).</small>
+            <div class="inline-form">
+                <input type="number" id="al-context-count-input" min="1" max="50" step="1"
+                    value="<%= group.active_listening_context_count || '' %>"
+                    placeholder="<%= defaultActiveListeningContextCount %>">
+                <button onclick="saveGroupActiveListeningContextCount('<%= group.group_id %>')">Save</button>
+            </div>
+        </div>
+    </div>
+
+    <h5 style="margin-top:1.5rem; margin-bottom:0.25rem">Media Attachments</h5>
+    <small class="section-desc">Send audio/image files to the active listener LLM for richer context.</small>
+
+    <label>
+        <input type="checkbox" role="switch" id="toggle-active_listening_send_audio"
+            data-group="<%= group.group_id %>" data-field="active_listening_send_audio"
+            <%= group.active_listening_send_audio != null ? (group.active_listening_send_audio !== 0 ? 'checked' : '') : (defaultAlSendAudio === '1' ? 'checked' : '') %>
+            onchange="toggleSetting(this)">
+        Send Audio to Active Listener
+        <span class="info-icon">i<span class="info-tooltip">Attach recent audio files so the active listener LLM can hear voice messages when deciding whether to respond.</span></span>
+    </label>
+
+    <label>
+        <input type="checkbox" role="switch" id="toggle-active_listening_send_images"
+            data-group="<%= group.group_id %>" data-field="active_listening_send_images"
+            <%= group.active_listening_send_images != null ? (group.active_listening_send_images !== 0 ? 'checked' : '') : (defaultAlSendImages === '1' ? 'checked' : '') %>
+            onchange="toggleSetting(this)">
+        Send Images to Active Listener
+        <span class="info-icon">i<span class="info-tooltip">Attach recent images so the active listener LLM can see shared images when deciding whether to respond.</span></span>
+    </label>
+
+    <div class="settings-grid" style="margin-top:0.5rem">
+        <div>
+            <label for="al-audio-count-input">Audio Count</label>
+            <small class="section-desc">Number of recent audio messages to attach. Leave empty to use the global default (<%= defaultAlAudioCount %>).</small>
+            <div class="inline-form">
+                <input type="number" id="al-audio-count-input" min="1" max="10" step="1"
+                    value="<%= group.active_listening_audio_count || '' %>"
+                    placeholder="<%= defaultAlAudioCount %>">
+                <button onclick="saveGroupAlAudioCount('<%= group.group_id %>')">Save</button>
+            </div>
+        </div>
+        <div>
+            <label for="al-image-count-input">Image Count</label>
+            <small class="section-desc">Number of recent images to attach. Leave empty to use the global default (<%= defaultAlImageCount %>).</small>
+            <div class="inline-form">
+                <input type="number" id="al-image-count-input" min="1" max="10" step="1"
+                    value="<%= group.active_listening_image_count || '' %>"
+                    placeholder="<%= defaultAlImageCount %>">
+                <button onclick="saveGroupAlImageCount('<%= group.group_id %>')">Save</button>
+            </div>
+        </div>
+    </div>
+
+    <h5 style="margin-top:1.5rem; margin-bottom:0.25rem">Additional Instructions</h5>
+    <small class="section-desc">Extra instructions injected into the global decision prompt for this group. These are treated as high priority. Leave empty for no additional instructions.</small>
+    <textarea id="al-prompt-editor" class="context-editor" data-group="<%= group.group_id %>" data-save-btn="btn-save-al-prompt" placeholder="e.g. Always respond when someone asks about cooking recipes."><%= group.active_listening_prompt || '' %></textarea>
+    <button id="btn-save-al-prompt" onclick="saveGroupActiveListeningPrompt('<%= group.group_id %>')" disabled>Save</button>
+    </div>
+</article>
 
 <%- include('footer') %>

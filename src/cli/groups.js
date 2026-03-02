@@ -70,6 +70,7 @@ async function main() {
             console.log(`Auth Check:${group.authorization_check_enabled ? ' ✅ Enabled' : ' ❌ Disabled'}`);
             console.log(`Search:    ${group.google_search_enabled ? ' ✅ Enabled' : ' ❌ Disabled'}`);
             console.log(`Audio:     ${group.audio_enabled ? ' ✅ Enabled' : ' ❌ Disabled'}`);
+            console.log(`Image:     ${group.image_enabled ? ' ✅ Enabled' : ' ❌ Disabled'}`);
             console.log(`TTS:       ${group.tts_enabled ? ' ✅ Enabled' : ' ❌ Disabled'}`);
             console.log(`Last Active: ${group.last_processed_timestamp || 'Never'}`);
 
@@ -94,6 +95,7 @@ async function main() {
                 'authorization_check_enabled',
                 'google_search_enabled',
                 'audio_enabled',
+                'image_enabled',
                 'tts_enabled'
             ];
 
@@ -104,7 +106,7 @@ async function main() {
 
             // Convert boolean-like strings to integers
             let dbValue = value;
-            if (['authorization_check_enabled', 'google_search_enabled', 'audio_enabled', 'tts_enabled'].includes(key)) {
+            if (['authorization_check_enabled', 'google_search_enabled', 'audio_enabled', 'image_enabled', 'tts_enabled'].includes(key)) {
                 if (value === 'true' || value === '1' || value === 'on') dbValue = 1;
                 else if (value === 'false' || value === '0' || value === 'off') dbValue = 0;
                 else {
@@ -134,6 +136,7 @@ Valid Settings for 'set':
   - authorization_check_enabled (0/1)
   - google_search_enabled (0/1)
   - audio_enabled (0/1)
+  - image_enabled (0/1)
   - tts_enabled (0/1)
 `);
         }

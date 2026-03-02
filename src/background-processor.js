@@ -1,14 +1,9 @@
-const { GoogleGenerativeAI } = require('@google/generative-ai');
+const { getGenAI } = require('./ai/gemini');
 const { calculateCost } = require('./pricing-config');
 const TokenUsageTracker = require('./token-usage-tracker');
 const conversationStore = require('./conversation-store');
 const { getOrCreateGroupInfo, getBotSetting } = require('./db');
 const logger = require('./logger');
-
-require('dotenv').config();
-
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
-const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
 
 class BackgroundProcessor {
     constructor(config) {
@@ -135,6 +130,12 @@ class BackgroundProcessor {
             // Determine model
             const modelOverride = await getBotSetting('background_ai_model');
             const modelName = modelOverride || this.config.backgroundAiModel;
+
+            const genAI = getGenAI();
+            if (!genAI) {
+                logger.warn('Background', 'Gemini API key not configured yet, skipping background processing');
+                return;
+            }
 
             // Run all registered handlers
             for (const [name, handler] of this.handlers) {

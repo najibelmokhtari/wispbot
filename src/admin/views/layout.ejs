@@ -4,6 +4,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="csrf-token" content="<%= csrfToken %>">
     <title>WhatsApp Bot Admin</title>
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css">
     <style>
@@ -22,6 +23,44 @@
 
         .badge-off {
             color: #999;
+        }
+
+        .feature-icon {
+            font-size: 1.15rem;
+            line-height: 1;
+            cursor: help;
+        }
+
+        .feature-icon.off {
+            opacity: 0.2;
+            filter: grayscale(1);
+        }
+
+        .feature-icon.global-off {
+            opacity: 0.15;
+            filter: grayscale(1);
+            text-decoration: line-through;
+        }
+
+        .features-legend {
+            display: flex;
+            gap: 1.25rem;
+            flex-wrap: wrap;
+            font-size: 0.8rem;
+            color: #666;
+            margin-bottom: 0.75rem;
+        }
+
+        .features-legend span {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.3rem;
+            cursor: help;
+        }
+
+        .features-legend span.global-off-legend {
+            opacity: 0.4;
+            text-decoration: line-through;
         }
 
         .toast {
@@ -122,12 +161,31 @@
             cursor: pointer;
         }
 
+        .flags-cell {
+            white-space: nowrap;
+        }
+
+        .flags-cell .feature-icon {
+            margin: 0 0.15rem;
+        }
+
         .actions-cell {
             white-space: nowrap;
         }
 
         .actions-cell .action-btn + .action-btn {
             margin-left: 0.25rem;
+        }
+
+        .labeled-action {
+            gap: 0.35rem;
+            padding: 0.25rem 0.6rem;
+        }
+
+        .labeled-action .action-label {
+            font-size: 0.7rem;
+            font-weight: 600;
+            letter-spacing: 0.02em;
         }
 
         .inspect-row td {
@@ -236,13 +294,263 @@
         .info-icon:hover .info-tooltip {
             display: block;
         }
+
+        /* File tree browser */
+        .file-tree {
+            border: 1px solid var(--pico-muted-border-color, #ddd);
+            border-radius: 8px;
+            padding: 0.5rem 0;
+            max-height: 500px;
+            overflow-y: auto;
+        }
+
+        .tree-folder-header {
+            display: flex;
+            align-items: center;
+            gap: 0.4rem;
+            padding: 0.4rem 0.75rem;
+            cursor: pointer;
+            user-select: none;
+            border-radius: 4px;
+            transition: background 0.12s;
+        }
+
+        .tree-folder-header:hover {
+            background: var(--pico-secondary-focus, #f0f0f0);
+        }
+
+        .tree-chevron {
+            font-size: 0.6rem;
+            width: 0.9rem;
+            text-align: center;
+            color: var(--pico-muted-color, #888);
+            flex-shrink: 0;
+        }
+
+        .tree-folder-icon {
+            font-size: 1.1rem;
+            flex-shrink: 0;
+        }
+
+        .tree-folder-name {
+            font-weight: 600;
+            font-size: 0.9rem;
+        }
+
+        .tree-folder-count {
+            margin-left: auto;
+            font-size: 0.75rem;
+            color: var(--pico-muted-color, #888);
+        }
+
+        .tree-persona {
+            padding: 0.5rem 0.75rem;
+            cursor: pointer;
+            border-radius: 4px;
+            transition: background 0.12s;
+        }
+
+        .tree-persona:hover {
+            background: var(--pico-secondary-focus, #f0f0f0);
+        }
+
+        .tree-persona-header {
+            display: flex;
+            align-items: center;
+            gap: 0.4rem;
+        }
+
+        .tree-persona-icon {
+            font-size: 1rem;
+            flex-shrink: 0;
+        }
+
+        .tree-persona-name {
+            font-weight: 600;
+            font-size: 0.9rem;
+        }
+
+        .tree-badge-installed {
+            background: #2e7d32;
+            color: #fff;
+            padding: 0.05rem 0.45rem;
+            border-radius: 4px;
+            font-size: 0.65rem;
+            margin-left: 0.25rem;
+        }
+
+        .tree-persona-author {
+            margin-left: auto;
+            font-size: 0.75rem;
+            color: var(--pico-muted-color, #888);
+        }
+
+        .tree-persona-desc {
+            font-size: 0.8rem;
+            color: var(--pico-muted-color, #666);
+            margin-top: 0.15rem;
+            padding-left: 1.5rem;
+        }
+
+        .tree-persona-tags {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.2rem;
+            margin-top: 0.25rem;
+            padding-left: 1.5rem;
+        }
+
+        .tree-tag {
+            background: var(--pico-secondary-background, #e0e0e0);
+            color: var(--pico-secondary-inverse, #333);
+            padding: 0.05rem 0.4rem;
+            border-radius: 999px;
+            font-size: 0.65rem;
+        }
+
+        .tree-folder-children {
+            border-left: 1px solid var(--pico-muted-border-color, #ddd);
+            margin-left: 1.1rem;
+        }
+
+        /* Disabled section overlay (global feature off) */
+        .section-disabled-wrapper {
+            position: relative;
+        }
+
+        .section-disabled-wrapper .section-disabled-overlay {
+            position: absolute;
+            inset: 0;
+            background: rgba(255, 255, 255, 0.65);
+            z-index: 10;
+            border-radius: 6px;
+            cursor: not-allowed;
+        }
+
+        .section-disabled-wrapper .section-disabled-overlay .disabled-tooltip {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: #333;
+            color: #fff;
+            padding: 0.5rem 1rem;
+            border-radius: 6px;
+            font-size: 0.85rem;
+            white-space: nowrap;
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity 0.2s;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+        }
+
+        .section-disabled-wrapper .section-disabled-overlay:hover .disabled-tooltip {
+            opacity: 1;
+        }
+
+        /* Persona split-panel layout */
+        .persona-split {
+            display: flex;
+            gap: 1rem;
+            min-height: 500px;
+        }
+
+        .persona-sidebar {
+            width: 200px;
+            min-width: 200px;
+            display: flex;
+            flex-direction: column;
+            border: 1px solid var(--pico-muted-border-color, #ddd);
+            border-radius: 8px;
+            overflow: hidden;
+        }
+
+        .persona-sidebar-list {
+            flex: 1;
+            overflow-y: auto;
+            padding: 0.25rem 0;
+        }
+
+        .persona-sidebar-item {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0.5rem 0.75rem;
+            cursor: pointer;
+            border-left: 3px solid transparent;
+            transition: background 0.12s, border-color 0.12s;
+            font-size: 0.9rem;
+        }
+
+        .persona-sidebar-item:hover {
+            background: var(--pico-secondary-focus, #f0f0f0);
+        }
+
+        .persona-sidebar-item.active {
+            background: var(--pico-secondary-focus, #f0f0f0);
+            border-left-color: var(--pico-primary, #1565c0);
+            font-weight: 600;
+        }
+
+        .persona-sidebar-name {
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .persona-sidebar-badge {
+            font-size: 0.65rem;
+            background: var(--pico-secondary-background, #e0e0e0);
+            color: var(--pico-secondary-inverse, #555);
+            padding: 0.05rem 0.4rem;
+            border-radius: 999px;
+            flex-shrink: 0;
+            margin-left: 0.25rem;
+        }
+
+        .persona-sidebar-actions {
+            padding: 0.5rem;
+            border-top: 1px solid var(--pico-muted-border-color, #ddd);
+        }
+
+        .persona-editor-panel {
+            flex: 1;
+            min-width: 0;
+            border: 1px solid var(--pico-muted-border-color, #ddd);
+            border-radius: 8px;
+            padding: 1.25rem;
+            overflow-y: auto;
+        }
+
+        .persona-empty-state {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            height: 100%;
+        }
+
+        @media (max-width: 768px) {
+            .persona-split {
+                flex-direction: column;
+                min-height: auto;
+            }
+
+            .persona-sidebar {
+                width: 100%;
+                min-width: 100%;
+                max-height: 200px;
+            }
+        }
     </style>
 </head>
 
 <body>
     <nav>
         <ul>
-            <li><strong>WhatsApp Bot Admin</strong></li>
+            <li>
+                <strong>WhatsApp Bot Admin</strong>
+                <span id="bot-active-nav-indicator" style="<%= (typeof botActive !== 'undefined' && botActive) ? 'display:none;' : '' %> margin-left:0.5rem; font-size:0.7rem; padding:0.15rem 0.5rem; border-radius:4px; background:#c62828; color:#fff; font-weight:600; vertical-align:middle;">OFF</span>
+            </li>
         </ul>
         <ul>
             <li><a href="<%= basePath %>/connection">Connection <span id="connection-status-label"
@@ -250,9 +558,12 @@
                         title="<%= botConnected ? 'Connected' : 'Disconnected' %>"><%= botConnected ? '✅' : '⚠️' %></span></a></li>
             <li><a href="<%= basePath %>/groups">Chats</a></li>
             <li><a href="<%= basePath %>/users">Users</a></li>
+            <li><a href="<%= basePath %>/personas">Personas</a></li>
+            <li><a href="<%= basePath %>/usage">Usage</a></li>
             <li><a href="<%= basePath %>/settings">Settings</a></li>
             <li>
                 <form method="POST" action="<%= basePath %>/logout" style="margin:0">
+                    <input type="hidden" name="_csrf" value="<%= csrfToken %>">
                     <button type="submit" class="outline secondary"
                         style="padding:0.25rem 0.75rem; margin:0">Logout</button>
                 </form>

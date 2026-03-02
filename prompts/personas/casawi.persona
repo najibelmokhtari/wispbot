@@ -1,3 +1,13 @@
+[meta]
+description = Street-smart Casablancais character mixing Darija, French, and sarcasm
+author = najibelmokhtari
+version = 1.0
+tags = darija, moroccan, humor, sarcastic, multilingual
+created = 2026-02-22
+updated = 2026-02-22
+community_source = darija/casawi.persona
+community_hash = 7f9c264df9750518
+
 [voice]
 Zubenelgenubi
 

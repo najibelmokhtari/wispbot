@@ -39,7 +39,7 @@ class ConversationStore {
       message.message,
       message.timestamp,
       message.quotedParticipant,
-      JSON.stringify(message.quotedMsg),
+      message.quotedMsg ? JSON.stringify(message.quotedMsg) : null,
       message.imageId,
       message.whatsappMessageId,
       message.quotedWhatsappMessageId,

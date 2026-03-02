@@ -1,0 +1,163 @@
+<%- include('layout') %>
+
+    <h2>Personas</h2>
+
+    <!-- Persona Management -->
+    <article>
+        <header><strong>Installed Personas</strong></header>
+        <small class="section-desc">Create, edit, and delete personas. These are the system prompts that define the
+            bot's personality.</small>
+
+        <div class="persona-split">
+            <!-- Left sidebar: persona list -->
+            <div class="persona-sidebar">
+                <div class="persona-sidebar-list" id="persona-list">
+                    <% for (const p of personas) { %>
+                        <div class="persona-sidebar-item" id="persona-item-<%= p %>"
+                            onclick="selectPersona('<%= p %>')"
+                            <% if (personaDescriptions[p]) { %>title="<%- personaDescriptions[p].replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;') %>"<% } %>>
+                            <span class="persona-sidebar-name"><%= communityModified.has(p) ? p + '*' : p %></span>
+                            <% if (p === 'default') { %>
+                                <span class="persona-sidebar-badge">base</span>
+                            <% } %>
+                        </div>
+                    <% } %>
+                </div>
+                <div class="persona-sidebar-actions">
+                    <button class="outline" onclick="showCreatePersonaPanel()" id="btn-new-persona" style="width:100%; margin:0; padding:0.4rem 0.75rem; font-size:0.85rem">+ New Persona</button>
+                </div>
+            </div>
+
+            <!-- Right panel: persona editor -->
+            <div class="persona-editor-panel" id="persona-editor-panel">
+                <!-- Empty state -->
+                <div id="persona-empty-state" class="persona-empty-state">
+                    <p style="color:#888; text-align:center; margin-top:3rem">Select a persona from the list to view and edit it.</p>
+                </div>
+
+                <!-- Persona detail view (hidden by default) -->
+                <div id="persona-detail-view" style="display:none">
+                    <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:0.75rem">
+                        <h4 style="margin:0" id="persona-detail-title"></h4>
+                        <button class="outline secondary" id="persona-delete-btn" onclick="deletePersona(currentPersona)"
+                            style="color:#c62828; border-color:#c62828; margin:0; padding:0.25rem 0.75rem; font-size:0.85rem">Delete</button>
+                    </div>
+
+                    <!-- Default persona notice -->
+                    <div id="persona-default-notice" style="display:none">
+                        <small class="field-desc">The default persona uses only the <strong>Base Instructions</strong>
+                            system prompt (editable in Settings) with no additional persona prompt.</small>
+                    </div>
+
+                    <!-- Description (non-default only) -->
+                    <div id="persona-description-section" style="display:none">
+                        <h6 style="margin-bottom:0.25rem">Description</h6>
+                        <div style="display:flex; gap:0.5rem; align-items:center">
+                            <input type="text" id="persona-description-editor" placeholder="Short description of this persona"
+                                maxlength="200" style="margin-bottom:0" oninput="markPersonaDirty('description')">
+                            <button id="btn-save-persona-description" onclick="savePersonaDescription()" style="margin:0; white-space:nowrap" disabled>Save</button>
+                        </div>
+                    </div>
+
+                    <!-- System prompt (non-default only) -->
+                    <div id="persona-prompt-section" style="display:none">
+                        <h6 style="margin-bottom:0.25rem">System Prompt</h6>
+                        <textarea id="persona-content-editor" class="persona-editor"
+                            placeholder="Loading..." oninput="markPersonaDirty('prompt')"></textarea>
+                        <button id="btn-save-persona-prompt" onclick="savePersonaPrompt()" style="margin-bottom:1rem" disabled>Save Persona Prompt</button>
+                    </div>
+
+                    <h6 style="margin-top:1rem; margin-bottom:0.25rem">TTS Voice</h6>
+                    <small class="field-desc" id="persona-tts-voice-desc"></small>
+                    <select id="persona-tts-voice-select"
+                        onchange="savePersonaTtsVoice(currentPersona, this.value)"
+                        style="margin-top:0.25rem">
+                        <option value="" id="persona-tts-voice-default-opt">Use Default Persona Voice</option>
+                        <% for (const v of ttsVoices.filter(v => v.gender === 'male')) { %>
+                            <option value="<%= v.id %>">
+                                <%= v.name %> (Male, <%= v.description %>)
+                            </option>
+                        <% } %>
+                        <% for (const v of ttsVoices.filter(v => v.gender === 'female')) { %>
+                            <option value="<%= v.id %>">
+                                <%= v.name %> (Female, <%= v.description %>)
+                            </option>
+                        <% } %>
+                    </select>
+
+                    <h6 style="margin-top:1rem; margin-bottom:0.25rem">TTS Style Prompt</h6>
+                    <small class="field-desc" id="persona-tts-style-desc"></small>
+                    <textarea id="persona-tts-style-editor" class="persona-editor"
+                        placeholder="Loading..." style="margin-top:0.25rem; min-height:150px" oninput="markPersonaDirty('ttsStyle')"></textarea>
+                    <button id="btn-save-tts-style" onclick="savePersonaTtsStyle()" disabled>Save TTS Style</button>
+
+                    <!-- Community modified notice -->
+                    <div id="persona-community-notice" style="display:none; margin-top:1rem; padding:0.5rem 0.75rem; border-top:1px solid var(--pico-muted-border-color, #ddd)">
+                        <small style="color:#888">* Modified from community persona. To restore the original, reinstall it from the <a href="#" onclick="document.getElementById('community-browse-btn').scrollIntoView({behavior:'smooth'}); return false;">community browser</a> below.</small>
+                    </div>
+                </div>
+
+                <!-- Create new persona view (hidden by default) -->
+                <div id="persona-create-view" style="display:none">
+                    <h4 style="margin-bottom:0.75rem">Create New Persona</h4>
+                    <label for="new-persona-name" style="margin-bottom:0.25rem">Name</label>
+                    <input type="text" id="new-persona-name" placeholder="persona_name (lowercase, underscores)"
+                        pattern="[a-z0-9_]+" maxlength="30" style="margin-bottom:0.75rem">
+                    <label for="new-persona-description" style="margin-bottom:0.25rem">Description</label>
+                    <input type="text" id="new-persona-description" placeholder="Short description of this persona"
+                        maxlength="200" style="margin-bottom:0.75rem">
+                    <label for="new-persona-content" style="margin-bottom:0.25rem">System Prompt</label>
+                    <textarea id="new-persona-content" class="persona-editor"
+                        placeholder="Enter the system prompt for this persona..."></textarea>
+                    <div style="display:flex; gap:0.5rem">
+                        <button onclick="createNewPersona()">Create</button>
+                        <button class="outline secondary" onclick="cancelCreatePersona()">Cancel</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </article>
+
+    <!-- Community Personas -->
+    <article>
+        <header><strong>Community Personas</strong></header>
+        <small class="section-desc">Browse and install personas shared by the community from the <a
+                href="https://github.com/<%= communityRepo %>" target="_blank" rel="noopener">community
+                repository</a>.</small>
+
+        <div id="community-personas-container" style="margin-top:1rem">
+            <button id="community-browse-btn" onclick="loadCommunityIndex()" class="outline">Browse Community
+                Personas</button>
+
+            <div id="community-browser" style="display:none; margin-top:1rem">
+                <input type="search" id="community-search" placeholder="Search by name, description, or tag..."
+                    oninput="filterCommunityPersonas(this.value)" style="margin-bottom:0.75rem">
+
+                <div id="community-tree" class="file-tree"></div>
+
+                <div id="community-preview" style="display:none; margin-top:1rem">
+                    <article style="margin-bottom:0">
+                        <header>
+                            <strong id="community-preview-name"></strong>
+                            <small id="community-preview-author" style="float:right; color:#888"></small>
+                        </header>
+                        <p id="community-preview-description" style="margin-bottom:0.5rem"></p>
+                        <div id="community-preview-tags"
+                            style="margin-bottom:0.75rem; display:flex; flex-wrap:wrap; gap:0.35rem"></div>
+                        <details>
+                            <summary>System Prompt Preview</summary>
+                            <pre id="community-preview-prompt"
+                                style="white-space:pre-wrap; font-size:0.85rem; max-height:300px; overflow:auto"></pre>
+                        </details>
+                        <div style="display:flex; gap:0.5rem; margin-top:0.75rem">
+                            <button id="community-install-btn" onclick="installCommunityPersona()">Install
+                                Persona</button>
+                            <button class="outline secondary" onclick="closeCommunityPreview()">Back</button>
+                        </div>
+                    </article>
+                </div>
+            </div>
+        </div>
+    </article>
+
+    <%- include('footer') %>

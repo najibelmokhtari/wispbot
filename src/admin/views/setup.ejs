@@ -1,0 +1,428 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="csrf-token" content="<%= csrfToken %>">
+    <title>WispBot Setup</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css">
+    <!-- QR code is rendered server-side as a data URL image -->
+    <style>
+        body {
+            display: flex;
+            justify-content: center;
+            align-items: flex-start;
+            min-height: 100vh;
+            padding: 2rem 1rem;
+        }
+        .wizard-container {
+            max-width: 560px;
+            width: 100%;
+        }
+        .wizard-step {
+            display: none;
+        }
+        .wizard-step.active {
+            display: block;
+        }
+        .step-indicator {
+            display: flex;
+            gap: 0.4rem;
+            margin-bottom: 1.5rem;
+            justify-content: center;
+        }
+        .step-dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background: var(--pico-secondary-background);
+            transition: background 0.3s;
+        }
+        .step-dot.done {
+            background: var(--pico-primary-background);
+        }
+        .step-dot.current {
+            background: var(--pico-primary);
+        }
+        .btn-row {
+            display: flex;
+            gap: 0.75rem;
+            margin-top: 1.5rem;
+        }
+        .btn-row button {
+            flex: 1;
+        }
+        .btn-row .secondary {
+            --pico-background-color: transparent;
+            --pico-color: var(--pico-primary);
+            --pico-border-color: var(--pico-muted-border-color);
+        }
+        .checklist {
+            list-style: none;
+            padding: 0;
+        }
+        .checklist li {
+            padding: 0.5rem 0;
+            padding-left: 1.75rem;
+            position: relative;
+        }
+        .checklist li::before {
+            content: "☐";
+            position: absolute;
+            left: 0;
+            font-size: 1.1em;
+        }
+        .status-badge {
+            display: inline-block;
+            padding: 0.25rem 0.75rem;
+            border-radius: 1rem;
+            font-size: 0.85rem;
+            font-weight: 600;
+        }
+        .status-badge.success {
+            background: #d4edda;
+            color: #155724;
+        }
+        .status-badge.error {
+            background: #f8d7da;
+            color: #721c24;
+        }
+        .status-badge.waiting {
+            background: #fff3cd;
+            color: #856404;
+        }
+        #qr-img-setup {
+            display: block;
+            margin: 1rem auto;
+            max-width: 280px;
+            width: 280px;
+            height: 280px;
+        }
+        .persona-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+            gap: 0.75rem;
+            margin: 1rem 0;
+        }
+        .persona-card {
+            border: 2px solid var(--pico-secondary-background);
+            border-radius: 0.5rem;
+            padding: 0.75rem;
+            cursor: pointer;
+            transition: border-color 0.2s, background 0.2s;
+            text-align: center;
+        }
+        .persona-card:hover {
+            border-color: var(--pico-primary);
+        }
+        .persona-card.selected {
+            border-color: var(--pico-primary);
+            background: var(--pico-primary-focus);
+        }
+        .persona-card h6 {
+            margin: 0 0 0.25rem 0;
+            text-transform: capitalize;
+        }
+        .persona-card small {
+            color: var(--pico-muted-color);
+            font-size: 0.8rem;
+        }
+        .help-link {
+            font-size: 0.85rem;
+            color: var(--pico-primary);
+        }
+        .cost-note {
+            font-size: 0.85rem;
+            color: var(--pico-muted-color);
+            margin-top: 0.25rem;
+        }
+        .connected-info {
+            text-align: center;
+            padding: 1rem;
+        }
+        .connected-info h4 {
+            color: #155724;
+        }
+        .summary-table td:first-child {
+            font-weight: 600;
+            white-space: nowrap;
+            padding-right: 1rem;
+        }
+        .toast {
+            position: fixed;
+            top: 1rem;
+            right: 1rem;
+            padding: 0.75rem 1.25rem;
+            border-radius: 0.5rem;
+            color: white;
+            font-weight: 500;
+            z-index: 9999;
+            transform: translateX(120%);
+            transition: transform 0.3s;
+        }
+        .toast.show { transform: translateX(0); }
+        .toast.success { background: #28a745; }
+        .toast.error { background: #dc3545; }
+    </style>
+</head>
+<body>
+    <div class="wizard-container">
+        <div class="step-indicator" id="step-indicator"></div>
+
+        <!-- Step 1: Welcome -->
+        <article class="wizard-step active" data-step="0">
+            <header>
+                <h3>Welcome to WispBot</h3>
+            </header>
+            <p>Let's get your WhatsApp AI bot running in a few minutes!</p>
+            <p><strong>You'll need:</strong></p>
+            <ul class="checklist">
+                <li>A Google Gemini API key (<a href="https://aistudio.google.com/apikey" target="_blank" class="help-link">Get one free from Google AI Studio</a>)</li>
+                <li>Your phone using the bot's number with WhatsApp open</li>
+            </ul>
+            <p>That's it. Everything else has sensible defaults you can tweak later.</p>
+            <div class="btn-row">
+                <button onclick="wizardNext()">Let's Go</button>
+            </div>
+        </article>
+
+        <!-- Step 2: Gemini API Key -->
+        <article class="wizard-step" data-step="1">
+            <header>
+                <h3>Gemini API Key</h3>
+            </header>
+            <p>This powers your bot's brain.</p>
+            <ol>
+                <li>Go to <a href="https://aistudio.google.com/apikey" target="_blank">aistudio.google.com/apikey</a></li>
+                <li>Click <strong>Create API Key</strong></li>
+                <li>Copy and paste it below</li>
+            </ol>
+            <p class="cost-note">The free tier may only support some models (e.g. Flash). For access to smarter models like Gemini Pro, you may need to <a href="https://ai.google.dev/gemini-api/docs/billing" target="_blank">set up a billing account</a>. Check <a href="https://ai.google.dev/gemini-api/docs/pricing" target="_blank">Google's pricing page</a> for current details.</p>
+            <label for="api-key">API Key</label>
+            <input type="text" id="api-key" placeholder="AIza..." autocomplete="off">
+            <div id="api-key-status"></div>
+            <div class="btn-row">
+                <button class="secondary" onclick="wizardBack()">Back</button>
+                <button id="validate-key-btn" onclick="validateApiKey()">Validate Key</button>
+            </div>
+        </article>
+
+        <!-- Step 3: Admin Password -->
+        <article class="wizard-step" data-step="2">
+            <header>
+                <h3>Secure Your Admin Panel</h3>
+            </header>
+            <p>Set a password to protect this settings page. You'll need it to log in later.</p>
+            <label for="admin-password">Password</label>
+            <input type="password" id="admin-password" placeholder="At least 8 characters" minlength="8" autocomplete="new-password">
+            <label for="admin-password-confirm">Confirm Password</label>
+            <input type="password" id="admin-password-confirm" placeholder="Type it again" minlength="8" autocomplete="new-password">
+            <div id="password-status"></div>
+            <div class="btn-row">
+                <button class="secondary" onclick="wizardBack()">Back</button>
+                <button id="save-creds-btn" onclick="saveCredentials()">Save & Connect WhatsApp</button>
+            </div>
+        </article>
+
+        <!-- Step 4: Connect WhatsApp (QR) -->
+        <article class="wizard-step" data-step="3">
+            <header>
+                <h3>Connect to WhatsApp</h3>
+            </header>
+            <div id="qr-section">
+                <p>Scan this QR code with your phone:</p>
+                <ol>
+                    <li>Open <strong>WhatsApp</strong> on your phone</li>
+                    <li>Go to <strong>Settings &rarr; Linked Devices</strong></li>
+                    <li>Tap <strong>Link a Device</strong></li>
+                    <li>Point your camera at the code below</li>
+                </ol>
+                <img id="qr-img-setup" alt="QR Code" style="display:none;">
+                <div style="text-align: center;">
+                    <span class="status-badge waiting" id="connection-status-badge">Waiting for QR code...</span>
+                </div>
+            </div>
+            <div id="connected-section" style="display: none;">
+                <div class="connected-info">
+                    <h4>Connected!</h4>
+                    <p>Your bot is now live as <strong id="connected-name"></strong></p>
+                    <p>Phone: <strong id="connected-phone"></strong></p>
+                </div>
+                <p>Your bot is already working with smart defaults. You can stop here and go chat, or keep customizing.</p>
+                <p class="cost-note">Want to use a different phone number? Disconnect the bot from the admin panel, then reconnect and scan the QR code with the new number.</p>
+                <div class="btn-row">
+                    <button class="secondary" onclick="finishSetup()">Finish Setup</button>
+                    <button onclick="wizardNext()">Keep Customizing</button>
+                </div>
+            </div>
+        </article>
+
+        <!-- Step 5: Name Your Bot -->
+        <article class="wizard-step" data-step="4">
+            <header>
+                <h3>Name Your Bot</h3>
+            </header>
+            <p>This is how people summon your bot in group chats — they'll type this name to talk to it.</p>
+            <label for="bot-name">Bot Name</label>
+            <input type="text" id="bot-name" placeholder="e.g. Wisp, Luna, Sage..." value="Wisp">
+            <p class="cost-note">Tip: Short names work best. People will type this a lot!</p>
+            <div class="btn-row">
+                <button class="secondary" onclick="wizardBack()">Back</button>
+                <button onclick="wizardNext()">Next</button>
+            </div>
+        </article>
+
+        <!-- Step 6: Choose Personality -->
+        <article class="wizard-step" data-step="5">
+            <header>
+                <h3>Choose a Personality</h3>
+            </header>
+            <p>Pick how your bot talks. You can change this later or create your own.</p>
+            <div class="persona-grid" id="persona-grid">
+                <div class="persona-card selected" data-persona="default">
+                    <h6>Default</h6>
+                    <small>Neutral & helpful</small>
+                </div>
+            </div>
+            <div class="btn-row">
+                <button class="secondary" onclick="wizardBack()">Back</button>
+                <button onclick="wizardNext()">Next</button>
+            </div>
+        </article>
+
+        <!-- Step 7: Bot Trigger -->
+        <article class="wizard-step" data-step="6">
+            <header>
+                <h3>Bot Trigger</h3>
+            </header>
+            <p>Choose how your bot decides when to respond in group chats.</p>
+
+            <fieldset>
+                <legend><strong>When should your bot speak up?</strong></legend>
+                <label>
+                    <input type="radio" name="active-listening" value="off" checked>
+                    Only when mentioned <span class="cost-note"></span>
+                </label>
+                <p class="cost-note" style="margin-left: 1.75rem; margin-top: -0.5rem;">
+                    The bot will respond when someone tags it in the chat (e.g. <strong id="mention-example">@YourBot</strong>) or when someone replies directly to one of the bot's messages.
+                </p>
+                <label>
+                    <input type="radio" name="active-listening" value="on">
+                    Active listening — bot reads all messages and jumps in when relevant
+                    <span class="cost-note">Uses extra API calls per message batch in each group. Monitor usage if you invite the bot to busy groups.</span>
+                </label>
+            </fieldset>
+
+            <div id="tts-info" style="margin-top: 1rem;">
+                <fieldset id="tts-section-mention" style="display: block;">
+                    <legend><strong>Voice messages</strong></legend>
+                    <p>Your bot can also send audio messages (voice notes) instead of text. To make the bot reply with a voice note, include a special tag in your message.</p>
+                    <label for="tts-trigger">Voice message tag</label>
+                    <div style="display: flex; align-items: center; gap: 0.5rem;">
+                        <input type="text" id="tts-trigger" value="$audio" placeholder="e.g. $audio" style="max-width: 150px;">
+                    </div>
+                    <p class="cost-note">For example, type <strong id="tts-trigger-example">"$audio what's the weather?"</strong> to get a voice reply. You can change this tag later in the admin panel.</p>
+                </fieldset>
+                <fieldset id="tts-section-active" style="display: none;">
+                    <legend><strong>Voice messages</strong></legend>
+                    <p>Your bot can also reply using audio messages (voice notes) instead of text. In active listening mode, the bot will decide on its own whether to respond with text or a voice note based on what feels natural for the conversation. Users can ask the bot directly in the chat to send a voice reply. As an admin, you can also give general directions to the bot about when to use voice notes in the Text to Speech prompt in the admin panel.</p>
+                </fieldset>
+            </div>
+
+            <div class="btn-row">
+                <button class="secondary" onclick="wizardBack()">Back</button>
+                <button onclick="wizardNext()">Next</button>
+            </div>
+        </article>
+
+        <!-- Step 8: Memory -->
+        <article class="wizard-step" data-step="7">
+            <header>
+                <h3>Memory</h3>
+            </header>
+            <fieldset>
+                <legend><strong>Should your bot remember past conversations?</strong></legend>
+                <label>
+                    <input type="radio" name="memories" value="on" checked>
+                    Yes — bot periodically summarizes conversations for long-term context
+                    <span class="cost-note">This helps the bot recall past topics and conversations. Monitor usage if you invite the bot to very busy groups.</span>
+                </label>
+                <label>
+                    <input type="radio" name="memories" value="off">
+                    No <span class="cost-note">(bot only sees recent messages)</span>
+                </label>
+            </fieldset>
+
+            <div class="btn-row">
+                <button class="secondary" onclick="wizardBack()">Back</button>
+                <button onclick="wizardNext()">Next</button>
+            </div>
+        </article>
+
+        <!-- Step 9: Spending Limit -->
+        <article class="wizard-step" data-step="8">
+            <header>
+                <h3>Spending Limit</h3>
+            </header>
+            <fieldset>
+                <legend><strong>Set a spending limit for your bot</strong></legend>
+                <p class="cost-note">If your bot exceeds this amount, it will be automatically paused. You can change this later in the admin panel.</p>
+                <label>
+                    <input type="radio" name="spending-limit" value="monthly" checked>
+                    Monthly cap — resets automatically on the 1st of each month
+                </label>
+                <label>
+                    <input type="radio" name="spending-limit" value="manual">
+                    Hard cap — bot stops until you manually reset it
+                </label>
+                <label>
+                    <input type="radio" name="spending-limit" value="none">
+                    No limit <span class="cost-note">(some models may be free; check <a href="https://ai.google.dev/gemini-api/docs/pricing" target="_blank">Google's pricing</a>)</span>
+                </label>
+                <div id="spending-limit-row" style="margin-top: 0.5rem;">
+                    <div style="display: flex; align-items: center; gap: 0.5rem;">
+                        <span>$</span>
+                        <input type="number" id="spending-limit-amount" placeholder="e.g. 5" min="0.01" step="0.01" style="max-width: 120px;" value="2">
+                        <span class="cost-note">USD</span>
+                    </div>
+                </div>
+            </fieldset>
+
+            <div class="btn-row">
+                <button class="secondary" onclick="wizardBack()">Back</button>
+                <button onclick="wizardNext()">Next</button>
+            </div>
+        </article>
+
+        <!-- Step 10: Done -->
+        <article class="wizard-step" data-step="9">
+            <header>
+                <h3>You're All Set!</h3>
+            </header>
+            <p>Here's a summary of your setup:</p>
+            <table class="summary-table">
+                <tr><td>Bot Name</td><td id="summary-name">—</td></tr>
+                <tr><td>Personality</td><td id="summary-persona">—</td></tr>
+                <tr><td>Active Listening</td><td id="summary-listening">—</td></tr>
+                <tr><td>Memories</td><td id="summary-memories">—</td></tr>
+                <tr><td>Spending Limit</td><td id="summary-spending">—</td></tr>
+            </table>
+            <p><strong>What to do now:</strong></p>
+            <ol>
+                <li>Invite the bot's phone number to a WhatsApp group</li>
+                <li>Go to the <strong>Chats</strong> section in the admin panel and click <button style="display: inline-flex; align-items: center; gap: 0.35rem; padding: 0.2rem 0.6rem; font-size: 0.85rem; line-height: 1; vertical-align: middle; pointer-events: none;">▶ <span>Activate</span></button> next to the group</li>
+                <li>Mention <strong id="summary-mention">@Wisp</strong> in the group to start chatting with the bot</li>
+                <li>You can also send a direct message to the bot's phone number</li>
+            </ol>
+            <p class="cost-note">Come back to the admin panel anytime to tweak settings, manage groups, and more.</p>
+            <div class="btn-row">
+                <button onclick="finishSetup()">Go to Admin Panel</button>
+            </div>
+        </article>
+    </div>
+
+    <div class="toast" id="toast"></div>
+    <script>window.__basePath = '<%= basePath %>';</script>
+    <script src="<%= basePath %>/setup.js"></script>
+</body>
+</html>

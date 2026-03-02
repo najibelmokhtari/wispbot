@@ -1,33 +1,14 @@
-// --- Puppeteer 23.x compatibility patch for whatsapp-web.js ---
-// CRITICAL: This patch MUST run BEFORE require('whatsapp-web.js').
-// Client.js destructures `const {exposeFunctionIfAbsent} = require('./util/Puppeteer')`
-// at import time, capturing the function value. If we patch after that require,
-// the patched function is never used by Client.js.
-const puppeteerUtils = require('whatsapp-web.js/src/util/Puppeteer');
-puppeteerUtils.exposeFunctionIfAbsent = async function (page, name, fn) {
-    try {
-        const exist = await page.evaluate((n) => !!window[n], name);
-        if (exist) return;
-    } catch (e) {
-        // Execution context may have been destroyed by a navigation, proceed to try exposing
-    }
-    try {
-        await page.exposeFunction(name, fn);
-    } catch (e) {
-        if (e.message && e.message.includes('already exists')) {
-            // Binding persists across navigations in puppeteer 23.x — this is expected
-            return;
-        }
-        throw e;
-    }
-};
-// --- End patch (now safe to load whatsapp-web.js) ---
+// --- Baileys WhatsApp Bot ---
+const { default: makeWASocket, DisconnectReason, useMultiFileAuthState, downloadMediaMessage, getContentType, jidNormalizedUser, fetchLatestBaileysVersion } = require('@whiskeysockets/baileys');
+const pino = require('pino');
+const QRCode = require('qrcode');
+const { exec } = require('child_process');
+const { promisify } = require('util');
+const execAsync = promisify(exec);
 
 const { addPhoneToUsernameMapping } = require('./phone-number-replacer');
-const { Client, LocalAuth } = require('whatsapp-web.js');
-const qrcode = require('qrcode-terminal');
+const { jidToDbId, dbIdToJid, extractNumber, isJidGroup } = require('./whatsapp-utils');
 const fs = require('fs').promises;
-const fsSync = require('fs');
 const path = require('path');
 const { dispatch } = require('./commands');
 const conversationStore = require('./conversation-store');
@@ -35,10 +16,7 @@ const MessageQueueManager = require('./message-queue');
 const {
     getDatabase,
     closeDatabase,
-    addAddRequest,
     upsertUser,
-    setCustomAlias,
-    getUserAlias,
     getOrCreateGroupInfo,
     updateGroupInfo,
     isUserAuthorized,
@@ -52,77 +30,271 @@ const logger = require('./logger');
 
 const BackgroundProcessor = require('./background-processor');
 const memoriesHandler = require('./background-handlers/memories');
+const ActiveListener = require('./active-listener');
 
 let messageQueueManager;
 let backgroundProcessor;
-let messageHandlerSetup = false;
+let activeListener;
 
-// Dedup: WhatsApp Web store may fire 'add' twice for the same message
+// Dedup: Baileys may fire messages.upsert with the same message more than once
 const recentMessageIds = new Set();
-const MESSAGE_DEDUP_TTL = 5000; // 5 seconds
+const MESSAGE_DEDUP_TTL = 10000; // 10 seconds (longer than wwjs to handle offline bursts)
 
-// Helper to get contact details without crashing (Workaround for whatsapp-web.js issue)
-function getSafeContact(message) {
-    const author = message.author || message.from;
-    const notifyName = message._data.notifyName || 'Unknown User';
+// --- Connection state ---
+let sock = null;
+let connectionStatus = 'waiting';
+let lastQrDataUrl = null;
+let lastQr = null;
+let reconnectAttempts = 0;
+let protocolFailures = 0; // consecutive protocol-level failures (not network issues)
+const MAX_RECONNECT_DELAY = 60000;
+const PROTOCOL_FAILURE_THRESHOLD = 3; // show red banner after this many consecutive protocol failures
+let connectionOpenedAt = 0; // Unix ms — used for offline message detection
+let connectionAlert = null; // { type: 'warning'|'error', message: string } shown in admin panel
+
+// --- Baileys update helpers ---
+let baileysUpdateInProgress = false;
+
+async function checkAndUpdateBaileysIfNeeded() {
+    // Parse outdated info from npm (exits with code 1 when outdated, so check both paths)
+    let pkg = null;
+    try {
+        const { stdout } = await execAsync('npm outdated @whiskeysockets/baileys --json', {
+            cwd: path.resolve(__dirname, '..'),
+            timeout: 30000
+        });
+        if (stdout && stdout.trim()) {
+            pkg = JSON.parse(stdout)['@whiskeysockets/baileys'];
+        }
+    } catch (e) {
+        if (e.stdout && e.stdout.trim()) {
+            try { pkg = JSON.parse(e.stdout)['@whiskeysockets/baileys']; } catch { /* ignore */ }
+        }
+        if (!e.stdout && !pkg) {
+            logger.debug('Bot', `Baileys outdated check failed (non-critical): ${e.message}`);
+            return;
+        }
+    }
+
+    // npm outdated reports: current (installed), wanted (max satisfying semver range), latest (newest on registry)
+    // We compare current vs wanted — latest may be a different major version we can't install via npm update
+    if (!pkg || pkg.current === pkg.wanted) {
+        // Check if a stable major version exists beyond our semver range (ignore pre-releases like rc/beta/alpha)
+        const latestIsStable = pkg && pkg.latest && !pkg.latest.includes('-');
+        if (latestIsStable && pkg.current !== pkg.latest && pkg.wanted !== pkg.latest) {
+            logger.info('Bot', `Baileys is up to date (${pkg.current}), but a new major version is available: ${pkg.latest}`);
+            logger.info('Bot', 'To upgrade, run: npm install @whiskeysockets/baileys@latest');
+        } else {
+            logger.info('Bot', 'Baileys is up to date');
+        }
+        return;
+    }
+
+    logger.warn('Bot', `Baileys update available: ${pkg.current} → ${pkg.wanted}. Installing in background...`);
+    const updated = await updateBaileys();
+    if (updated) {
+        logger.warn('Bot', '');
+        logger.warn('Bot', '========================================================');
+        logger.warn('Bot', '  Baileys library was updated to the latest version.');
+        logger.warn('Bot', '  Please restart the bot to apply the update:');
+        logger.warn('Bot', '  Press Ctrl+C, then run "npm start"');
+        logger.warn('Bot', '========================================================');
+        logger.warn('Bot', '');
+    }
+}
+
+async function updateBaileys() {
+    if (baileysUpdateInProgress) return false;
+    baileysUpdateInProgress = true;
+    try {
+        logger.info('Bot', 'Updating Baileys library...');
+        const { stdout } = await execAsync('npm update @whiskeysockets/baileys 2>&1', {
+            cwd: path.resolve(__dirname, '..'),
+            timeout: 120000
+        });
+        if (stdout && stdout.trim()) {
+            logger.info('Bot', `Baileys update result: ${stdout.trim()}`);
+        }
+        logger.info('Bot', 'Baileys updated successfully.');
+        return true;
+    } catch (e) {
+        logger.error('Bot', `Baileys update failed: ${e.message}`);
+        return false;
+    } finally {
+        baileysUpdateInProgress = false;
+    }
+}
+
+async function checkBaileysLatest() {
+    try {
+        const { stdout } = await execAsync('npm outdated @whiskeysockets/baileys --json', {
+            cwd: path.resolve(__dirname, '..'),
+            timeout: 30000
+        });
+        if (stdout && stdout.trim()) return JSON.parse(stdout)['@whiskeysockets/baileys'] || null;
+    } catch (e) {
+        if (e.stdout && e.stdout.trim()) {
+            try { return JSON.parse(e.stdout)['@whiskeysockets/baileys'] || null; } catch { /* ignore */ }
+        }
+    }
+    return null;
+}
+
+// --- Offline "last_trigger" mode state ---
+const offlineTriggerQueue = new Map(); // groupId -> { message, client, isBotMentioned, isReplyToBot, useActiveListening }
+let offlineTriggerTimer = null;
+const OFFLINE_TRIGGER_DEBOUNCE_MS = 3000;
+
+// --- Shared state (persists across socket restarts) ---
+let botInitialized = false;
+
+// --- LID-to-phone mapping (populated from Baileys events) ---
+const lidToPhone = new Map(); // LID JID → phone JID (e.g. "123@lid" → "456@s.whatsapp.net")
+
+function registerLidMapping(lid, phoneJid) {
+    if (lid && phoneJid && lid !== phoneJid) {
+        lidToPhone.set(lid, phoneJid);
+    }
+}
+
+/** Resolve a JID — if it's a LID, return the phone JID; otherwise return as-is */
+function resolveLid(jid) {
+    if (!jid) return jid;
+    if (jid.endsWith('@lid') && lidToPhone.has(jid)) {
+        return lidToPhone.get(jid);
+    }
+    return jid;
+}
+
+// --- Health check ---
+let healthCheckInterval = null;
+let lastMessageReceivedAt = Date.now();
+const HEALTH_CHECK_INTERVAL_MS = 60_000;
+const HEALTH_CHECK_STALE_THRESHOLD_MS = 300_000;
+
+function updateLastMessageTime() {
+    lastMessageReceivedAt = Date.now();
+}
+
+// =====================================================================
+// Message Helpers (Baileys adapter)
+// =====================================================================
+
+function getMessageText(msg) {
+    const m = msg.message;
+    if (!m) return '';
+    return m.conversation
+        || m.extendedTextMessage?.text
+        || m.imageMessage?.caption
+        || m.videoMessage?.caption
+        || '';
+}
+
+function getMessageType(msg) {
+    if (!msg.message) return 'unknown';
+    return getContentType(msg.message);
+}
+
+function hasMedia(msg) {
+    const type = getMessageType(msg);
+    return ['imageMessage', 'audioMessage', 'pttMessage', 'videoMessage', 'documentMessage', 'stickerMessage'].includes(type);
+}
+
+function getQuotedInfo(msg) {
+    const contextInfo = msg.message?.extendedTextMessage?.contextInfo
+        || msg.message?.imageMessage?.contextInfo
+        || msg.message?.audioMessage?.contextInfo
+        || msg.message?.pttMessage?.contextInfo
+        || msg.message?.videoMessage?.contextInfo;
+
+    if (!contextInfo?.quotedMessage) return null;
+
     return {
-        id: { _serialized: author },
-        pushname: notifyName,
-        name: notifyName
+        quotedMessage: contextInfo.quotedMessage,
+        quotedParticipant: contextInfo.participant,
+        quotedMessageId: contextInfo.stanzaId,
+        quotedBody: contextInfo.quotedMessage?.conversation
+            || contextInfo.quotedMessage?.extendedTextMessage?.text
+            || ''
     };
 }
 
-// --- Smart Authorization Check (DB-backed) ---
-// Checks if a userId has the given role, resolving @lid to @c.us if necessary
-async function checkAuth(client, userId, checkFn) {
-    // 1. Direct match check
-    if (await checkFn(userId)) {
-        return true;
-    }
+function getSafeContact(msg) {
+    const rawSenderId = msg.key.participant || msg.key.remoteJid;
+    // Prefer phone number from message key attributes, fall back to LID resolver
+    const senderId = msg.key.participantPn || msg.key.senderPn || resolveLid(rawSenderId);
+    const pushName = msg.pushName || 'Unknown User';
+    return {
+        id: { _serialized: jidToDbId(senderId) },
+        pushname: pushName,
+        name: pushName
+    };
+}
 
-    // 2. If it's an LID, try to find the corresponding phone number (@c.us)
-    // The DB often contains @c.us IDs from !authorizeall or manual entry
+// Map Baileys message type to the simple type names the rest of the codebase expects
+function simplifyType(baileysType) {
+    const map = {
+        'imageMessage': 'image',
+        'audioMessage': 'audio',
+        'pttMessage': 'ptt',
+        'videoMessage': 'video',
+        'documentMessage': 'document',
+        'stickerMessage': 'sticker',
+        'conversation': 'chat',
+        'extendedTextMessage': 'chat',
+    };
+    return map[baileysType] || baileysType;
+}
+
+// =====================================================================
+// Smart Authorization Check
+// =====================================================================
+
+async function checkAuth(_sockRef, userId, checkFn) {
+    if (await checkFn(userId)) return true;
+
+    // Try @c.us ↔ @s.whatsapp.net conversion
+    const altId = userId.includes('@s.whatsapp.net')
+        ? userId.replace('@s.whatsapp.net', '@c.us')
+        : userId.replace('@c.us', '@s.whatsapp.net');
+    if (await checkFn(altId)) return true;
+
+    // LID fallback
     if (userId.endsWith('@lid')) {
-        try {
-            const contact = await client.getContactById(userId);
-            const phoneNumber = contact.number || (contact.id ? contact.id.user : null);
-
-            if (phoneNumber) {
-                const cUsId = `${phoneNumber}@c.us`;
-                if (await checkFn(cUsId)) {
-                    return true;
-                }
-            } else {
-                logger.warn('Auth', `Could not resolve phone number for LID ${userId}`);
-            }
-        } catch (error) {
-            logger.error('Auth', `Error resolving LID ${userId} for auth check: ${error.message}`);
-        }
+        const number = userId.split('@')[0];
+        const cUsId = `${number}@c.us`;
+        if (await checkFn(cUsId)) return true;
     }
 
     return false;
 }
 
-async function checkIsAuthorized(client, userId) {
-    return checkAuth(client, userId, isUserAuthorized);
+async function checkIsAuthorized(sockRef, userId) {
+    return checkAuth(sockRef, userId, isUserAuthorized);
 }
 
-async function checkIsAdmin(client, userId) {
-    return checkAuth(client, userId, isUserAdmin);
+async function checkIsAdmin(sockRef, userId) {
+    return checkAuth(sockRef, userId, isUserAdmin);
 }
-// ---------------------------------------------
+
+// =====================================================================
+// Bot Initialization (runs once)
+// =====================================================================
 
 async function initializeBot() {
+    if (botInitialized) {
+        logger.debug('Bot', 'initializeBot() already ran — skipping');
+        return;
+    }
+    botInitialized = true;
     logger.info('Bot', 'Initializing bot...');
-    await getDatabase(); // Initialize the database connection
+    await getDatabase();
 
-    // One-time import: migrate auth data from .txt files into the DB (only if DB has no auth data yet)
     const imported = await importAuthFromFiles('authorized_numbers.txt', 'admin_numbers.txt');
     if (imported.authorized > 0 || imported.admin > 0) {
         logger.info('Bot', `Imported auth data from text files: ${imported.authorized} authorized, ${imported.admin} admins`);
     }
 
-    // Load saved bot identity from DB (persisted from previous sessions)
     const savedName = await getBotSetting('bot_name');
     const savedUserId = await getBotSetting('bot_user_id');
     const savedNumber = await getBotSetting('bot_number');
@@ -134,12 +306,14 @@ async function initializeBot() {
     messageQueueManager = new MessageQueueManager(config);
     await messageQueueManager.initialize();
 
-    // Initialize background processor
     backgroundProcessor = new BackgroundProcessor(config);
     await backgroundProcessor.initialize();
     backgroundProcessor.registerHandler('memories', memoriesHandler);
 
-    // Ensure the image and audio directories exist
+    activeListener = new ActiveListener(config);
+    await activeListener.initialize();
+    activeListener.setInvocationHandler(handleBotInvocation);
+
     await fs.mkdir(config.imageDirectory, { recursive: true });
     await fs.mkdir(config.audioDirectory, { recursive: true });
     await fs.mkdir(config.memoriesDirectory, { recursive: true });
@@ -151,717 +325,431 @@ async function initializeBot() {
     logger.info('Bot', 'Bot initialization complete');
 }
 
-// Determine Chrome path based on OS
-const platform = require('os').platform();
-let executablePath;
-if (process.env.CHROME_EXECUTABLE_PATH) {
-    executablePath = process.env.CHROME_EXECUTABLE_PATH;
-} else if (platform === 'linux') {
-    executablePath = '/usr/bin/google-chrome-stable';
-} else if (platform === 'darwin') {
-    executablePath = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
-}
+// =====================================================================
+// Client Adapter (wraps sock for downstream compatibility)
+// =====================================================================
 
-logger.info('Bot', `Platform: ${platform}`);
-// Initialize WhatsApp client
-// The default whatsapp-web.js user agent is Chrome/101 (very outdated).
-// WhatsApp Web may serve incompatible JS to old browsers. Match the actual Chrome version.
-const userAgent = platform === 'linux'
-    ? 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.6723.58 Safari/537.36'
-    : 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.6723.58 Safari/537.36';
+function createClientAdapter(sockRef) {
+    return {
+        sendMessage: async (chatId, content, options = {}) => {
+            const jid = dbIdToJid(chatId);
 
-const client = new Client({
-    authStrategy: new LocalAuth({
-        clientId: 'sessionName',
-        dataPath: './tokens'
-    }),
-    // Increase auth timeout to 4 minutes for fresh sessions on slow servers
-    authTimeoutMs: 240000,
-    // Take over the session if another client is using it
-    takeoverOnConflict: true,
-    // Retry on timeout
-    takeoverTimeoutMs: 60000,
-    // Override the default Chrome/101 user agent
-    userAgent: userAgent,
-    // Skip web version caching — load WhatsApp Web fresh from server
-    webVersionCache: { type: 'none' },
-    puppeteer: {
-        headless: true,
-        executablePath: executablePath,
-        // Increase timeout for puppeteer operations
-        timeout: 120000,
-        args: platform === 'darwin' ? ['--no-sandbox'] : [
-            '--no-sandbox',
-            '--disable-setuid-sandbox',
-            '--disable-dev-shm-usage',
-            '--disable-accelerated-2d-canvas',
-            '--no-first-run',
-            '--no-zygote',
-            '--disable-gpu',
-            '--disable-extensions',
-            '--log-level=3',
-            '--disable-logging'
-        ]
-    }
-});
-
-// QR Code event
-client.on('qr', (qr) => {
-    logger.info('Bot', '='.repeat(50));
-    logger.info('Bot', 'QR CODE READY');
-    logger.info('Bot', '='.repeat(50));
-    logger.info('Bot', 'Scan this QR code with WhatsApp mobile app:');
-    logger.info('Bot', 'WhatsApp → Linked Devices → Link a Device');
-    logger.info('Bot', '='.repeat(50));
-    qrcode.generate(qr, { small: true });
-    logger.info('Bot', '='.repeat(50));
-});
-
-// Loading event
-client.on('loading_screen', (percent, message) => {
-    logger.info('Bot', `Loading: ${percent}% - ${message}`);
-});
-
-// Authentication success
-let authEventFired = false;
-client.on('authenticated', () => {
-    if (authEventFired) return; // Deduplicate — puppeteer 23.x can fire this multiple times
-    authEventFired = true;
-    logger.info('Bot', 'Authentication successful!');
-});
-
-// Fallback: if authenticated fires but ready never does within 60s,
-// check if WhatsApp Web actually loaded and manually complete initialization.
-let manualReadyAttempted = false;
-client.on('authenticated', () => {
-    authEventFired = true;
-    setTimeout(async () => {
-        if (clientReady || manualReadyAttempted) return;
-        manualReadyAttempted = true;
-        logger.warn('Bot', 'Ready event not received 60s after auth. Checking browser state...');
-        try {
-            if (!client.pupPage || client.pupPage.isClosed()) {
-                logger.warn('Bot', 'Browser page is closed. Cannot recover.');
-                return;
-            }
-            const pageState = await client.pupPage.evaluate(() => ({
-                hasStore: typeof window.Store !== 'undefined',
-                hasWWebJS: typeof window.WWebJS !== 'undefined',
-                title: document.title
-            }));
-            logger.info('Bot', 'Fallback state: title=' + pageState.title +
-                ' | Store=' + pageState.hasStore + ' | WWebJS=' + pageState.hasWWebJS);
-
-            if (!pageState.hasStore) {
-                logger.warn('Bot', 'Store not available — WhatsApp Web did not fully load. Will wait for auto-recovery.');
-                return;
-            }
-
-            // Store is available but ready never fired — the library's injection chain broke.
-            // Manually complete what the onAppStateHasSyncedEvent callback should have done.
-            logger.info('Bot', 'Store found! Manually completing initialization...');
-
-            if (!pageState.hasWWebJS) {
-                const { LoadUtils } = require('whatsapp-web.js/src/util/Injected/Utils');
-                await client.pupPage.evaluate(LoadUtils);
-            }
-
-            const { ClientInfo } = require('whatsapp-web.js/src/structures');
-            const InterfaceController = require('whatsapp-web.js/src/util/InterfaceController');
-
-            client.info = new ClientInfo(client, await client.pupPage.evaluate(() => ({
-                ...window.Store.Conn.serialize(),
-                wid: window.Store.User.getMaybeMePnUser() || window.Store.User.getMaybeMeLidUser()
-            })));
-            client.interface = new InterfaceController(client);
-
-            await client.attachEventListeners();
-
-            // Cancel the 3-minute hard kill
-            if (readyTimeout) {
-                clearTimeout(readyTimeout);
-                readyTimeout = null;
-                logger.info('Bot', 'Cancelled 3-minute hard kill timer.');
-            }
-
-            logger.info('Bot', 'Manual initialization complete. Emitting ready.');
-            client.emit('ready');
-        } catch (e) {
-            logger.error('Bot', 'Manual recovery failed: ' + e.message);
-            logger.info('Bot', 'Will wait for auto-recovery timeout.');
-        }
-    }, 60000);
-});
-
-// Client ready
-client.on('ready', async () => {
-    // Guard against duplicate ready events (can fire twice during init due to framenavigated + inject)
-    if (clientReady) {
-        logger.debug('Bot', 'Ignoring duplicate ready event');
-        return;
-    }
-    clientReady = true;
-    try {
-        logger.info('Bot', 'Client is ready!');
-        await initializeBot();
-
-        // Auto-detect bot identity from WhatsApp connection
-        if (client.info && client.info.wid) {
-            const detectedUserId = client.info.wid._serialized;
-            const detectedNumber = client.info.wid.user;
-            const detectedPushname = client.info.pushname || '';
-
-            await setBotSetting('bot_user_id', detectedUserId);
-            await setBotSetting('bot_number', detectedNumber);
-            await setBotSetting('bot_pushname', detectedPushname);
-
-            // Only set bot_name if not already configured (preserve user edits)
-            const existingName = await getBotSetting('bot_name');
-            if (!existingName) {
-                await setBotSetting('bot_name', detectedPushname || config.botName);
-            }
-
-            // Update config in-place (propagates to all consumers by reference)
-            config.botUserId = detectedUserId;
-            config.botNumber = detectedNumber;
-            config.botName = (await getBotSetting('bot_name')) || config.botName;
-
-            // Also detect bot's LID (Linked ID) — WhatsApp mentions now use LID format
-            try {
-                const lidUser = await client.pupPage.evaluate(() =>
-                    window.Store.User.getMaybeMeLidUser()
-                );
-                if (lidUser && lidUser._serialized) {
-                    config.botLidUserId = lidUser._serialized;
-                    logger.info('Bot', `Bot LID: ${config.botLidUserId}`);
+            if (typeof content === 'string') {
+                const payload = { text: content };
+                if (options.mentions) {
+                    payload.mentions = options.mentions.map(dbIdToJid);
                 }
-            } catch (e) {
-                logger.warn('Bot', 'Could not detect bot LID: ' + e.message);
+                return sockRef.sendMessage(jid, payload);
             }
 
-            addPhoneToUsernameMapping(config.botUserId, config.botName);
-            logger.info('Bot', `Bot identity: ${config.botName} (${detectedNumber}, ${detectedUserId})`);
-        }
-
-        // Mark bot as "online" so typing indicators are visible in DM chats
-        try {
-            await client.sendPresenceAvailable();
-        } catch (e) {
-            logger.warn('Bot', 'Could not set presence available: ' + e.message);
-        }
-
-        setupMessageHandler();
-
-        logger.info('Bot', 'Bot successfully started and ready to receive messages!');
-    } catch (error) {
-        logger.error('Bot', `Error during bot initialization: ${error.message}`);
-        logger.error('Bot', error.stack);
-    }
-});
-
-// Authentication failure
-client.on('auth_failure', msg => {
-    logger.error('Bot', 'Authentication failure: ' + msg);
-});
-
-// Disconnected
-client.on('disconnected', (reason) => {
-    logger.warn('Bot', 'Client was disconnected: ' + reason);
-    clientReady = false;
-});
-
-// State change
-client.on('change_state', state => {
-    logger.info('Bot', 'Client state changed: ' + state);
-});
-
-// Initialize and start the client
-logger.info('Bot', 'Initializing WhatsApp client...');
-
-// Auto-recovery: if client doesn't become ready within 3 minutes,
-// destroy the stale session and re-initialize to force a fresh QR scan.
-let readyTimeout = null;
-let clientReady = false;
-
-// Periodic diagnostic: check if Debug.VERSION appears during auth wait
-let diagInterval = null;
-function startDebugVersionPolling() {
-    let pollCount = 0;
-    diagInterval = setInterval(async () => {
-        pollCount++;
-        try {
-            if (!client.pupPage || client.pupPage.isClosed()) return;
-            const state = await client.pupPage.evaluate(() => ({
-                url: location.href,
-                hasDebug: typeof window.Debug !== 'undefined',
-                version: window.Debug?.VERSION,
-                title: document.title,
-                // Extra diagnostics: check for key WhatsApp Web globals
-                hasRequire: typeof window.require !== 'undefined',
-                hasWebpackJsonp: typeof window.webpackChunkwhatsapp_web_client !== 'undefined',
-                scriptCount: document.querySelectorAll('script').length,
-                errorCount: window.__wwjsErrors?.length || 0,
-                userAgent: navigator.userAgent,
-            }));
-            logger.debug('Browser', `Poll #${pollCount}: url=${state.url} | Debug=${state.hasDebug} | version=${state.version || 'undefined'} | title=${state.title} | scripts=${state.scriptCount} | UA=${pollCount === 1 ? state.userAgent : '(skip)'}`);
-            if (state.version) {
-                logger.info('Browser', 'Debug.VERSION found! WhatsApp Web initialized. Stopping poll.');
-                clearInterval(diagInterval);
-            }
-        } catch (e) {
-            logger.error('Browser', `Debug poll #${pollCount} error: ${e.message}`);
-        }
-    }, 15000); // every 15 seconds
-}
-
-function startReadyTimeout() {
-    clientReady = false;
-    authEventFired = false;
-    manualReadyAttempted = false;
-    startDebugVersionPolling();
-    readyTimeout = setTimeout(async () => {
-        if (clientReady) return;
-        logger.warn('Bot', 'Client has not become ready after 3 minutes!');
-
-        // Capture diagnostics before destroying
-        try {
-            if (client.pupPage && !client.pupPage.isClosed()) {
-                const diag = await client.pupPage.evaluate(() => ({
-                    url: location.href,
-                    title: document.title,
-                    hasDebug: typeof window.Debug !== 'undefined',
-                    debugVersion: window.Debug?.VERSION,
-                    bodyText: document.body?.innerText?.substring(0, 500)
-                }));
-                logger.info('Browser', 'Diagnostics: ' + JSON.stringify(diag));
-            }
-        } catch (e) {
-            logger.error('Browser', 'Could not capture diagnostics: ' + e.message);
-        }
-
-        // Delete stale session data so a fresh QR code is generated on restart
-        try {
-            const tokensPath = path.join(__dirname, '..', 'tokens');
-            if (fsSync.existsSync(tokensPath)) {
-                fsSync.rmSync(tokensPath, { recursive: true, force: true });
-                logger.info('Bot', 'Deleted stale tokens directory.');
-            }
-        } catch (e) {
-            logger.error('Bot', 'Error deleting tokens: ' + e.message);
-        }
-
-        // Exit process and let PM2 restart cleanly instead of reusing stale client state
-        logger.info('Bot', 'Exiting process for clean restart (PM2 will restart automatically)...');
-        process.exit(1);
-    }, 180000); // 3 minutes
-}
-
-client.on('ready', () => {
-    clientReady = true;
-    if (readyTimeout) {
-        clearTimeout(readyTimeout);
-        readyTimeout = null;
-    }
-    if (diagInterval) {
-        clearInterval(diagInterval);
-        diagInterval = null;
-    }
-});
-
-startReadyTimeout();
-
-// Catch any unhandled promise rejections globally
-process.on('unhandledRejection', (reason, promise) => {
-    logger.error('Bot', 'Unhandled Rejection at: ' + promise);
-    logger.error('Bot', 'Reason: ' + (reason instanceof Error ? reason.stack : JSON.stringify(reason)));
-});
-
-// Pre-flight check for Chrome
-if (executablePath && !fsSync.existsSync(executablePath)) {
-    logger.error('Bot', 'FATAL: Chrome executable not found at: ' + executablePath);
-    process.exit(1);
-}
-logger.info('Bot', 'Chrome executable: ' + (executablePath || 'puppeteer bundled'));
-
-// Start admin web panel early (doesn't need WhatsApp to be ready)
-(async () => {
-    try {
-        await getDatabase();
-        const { startAdminServer } = require('./admin/admin-server');
-        startAdminServer(config, {
-            whatsappClient: client,
-            get messageQueueManager() { return messageQueueManager; }
-        });
-    } catch (err) {
-        logger.error('Admin', 'Error starting admin panel: ' + err.message);
-    }
-})();
-
-// --- Browser diagnostics: forward Chrome console to Node logs ---
-// Use a property setter trap to attach diagnostics as soon as pupPage is assigned
-// (before inject() runs, so we can see what happens during auth timeout)
-let _pupPageDiagAttached = false;
-let _pupPageValue = client.pupPage;
-Object.defineProperty(client, 'pupPage', {
-    get() { return _pupPageValue; },
-    set(page) {
-        _pupPageValue = page;
-        if (page && !_pupPageDiagAttached) {
-            _pupPageDiagAttached = true;
-
-            // CRITICAL FIX: Skip the whatsapp-web.js Error constructor replacement.
-            // Client.js replaces the global Error with a wrapper to hide moduleRaid from
-            // stack traces. This is an "isOfficialClient" bypass that's ONLY needed for
-            // the legacy (pre-2.3000) code path. On 2.3000+ (comet), moduleRaid isn't used
-            // so the replacement is a no-op with harmful side effects:
-            //   - Strips Error.captureStackTrace (V8 internal, used by WhatsApp Web)
-            //   - Breaks prototype chain for "class X extends Error"
-            //   - Can cause WhatsApp Web's initialization to silently fail
-            // We intercept evaluateOnNewDocument and block the Error replacement.
-            const origEvalOnNewDoc = page.evaluateOnNewDocument.bind(page);
-            page.evaluateOnNewDocument = function (fn, ...args) {
-                const fnStr = typeof fn === 'function' ? fn.toString() : String(fn);
-                if (fnStr.includes('moduleRaid') || fnStr.includes('originalError')) {
-                    logger.info('Browser', 'Blocked obsolete Error constructor replacement (isOfficialClient patch)');
-                    return Promise.resolve();
-                }
-                return origEvalOnNewDoc(fn, ...args);
-            };
-
-            // Forward browser console to server logs
-            // Log ALL types for first 60s to diagnose init failure, then only errors
-            let _browserLogCount = 0;
-            const _diagStart = Date.now();
-            page.on('console', msg => {
-                const type = msg.type();
-                const elapsed = Date.now() - _diagStart;
-                // During first 60s: log everything (cap 100); after: only errors (cap 30)
-                if (elapsed < 60000) {
-                    if (_browserLogCount >= 100) return;
+            // Media message (content has _isMedia flag)
+            if (content && content._isMedia) {
+                const payload = {};
+                if (options.sendAudioAsVoice) {
+                    payload.audio = content.buffer;
+                    payload.mimetype = 'audio/ogg; codecs=opus';
+                    payload.ptt = true;
+                } else if (content.mimetype?.startsWith('audio/')) {
+                    payload.audio = content.buffer;
+                    payload.mimetype = content.mimetype;
+                } else if (content.mimetype?.startsWith('image/')) {
+                    payload.image = content.buffer;
+                    payload.mimetype = content.mimetype;
                 } else {
-                    if (type !== 'error' && type !== 'warning') return;
-                    if (_browserLogCount >= 130) return;
+                    payload.document = content.buffer;
+                    payload.mimetype = content.mimetype;
+                    payload.fileName = content.filename;
                 }
-                const text = msg.text();
-                if (text.includes('Caught in:') || text.includes('ErrorUtils') || text.includes('non-fatal')) return;
-                _browserLogCount++;
-                logger.debug('Browser', `[${type}] ${text}`);
-            });
-            // Log page errors (uncaught exceptions in the browser)
-            page.on('pageerror', err => {
-                logger.error('Browser', 'Page error: ' + err.message + '\n' + err.stack);
-            });
-            // Log navigations for debugging context destruction
-            page.on('framenavigated', frame => {
-                if (frame === page.mainFrame()) {
-                    logger.info('Browser', 'Navigated to ' + frame.url());
-                }
-            });
-            // Log page request failures (network issues)
-            page.on('requestfailed', req => {
-                logger.warn('Browser', 'Request failed: ' + req.url() + ' - ' + (req.failure()?.errorText || 'unknown'));
-            });
-            logger.info('Browser', 'Browser page hooks attached');
-        }
-    },
-    configurable: true,
-    enumerable: true
-});
-
-// Monkey-patch attachEventListeners to fix missing Store modules in newer WhatsApp Web.
-// Runs after ExposeStore has populated window.Store but before event listeners are registered.
-const _originalAttachEventListeners = client.attachEventListeners.bind(client);
-client.attachEventListeners = async function () {
-    await this.pupPage.evaluate(() => {
-        // Store.Call may not exist in newer WhatsApp Web. Without this,
-        // Store.Call.on('add', ...) at Client.js:732 throws and prevents ALL
-        // subsequent listeners (Chat.on, Msg.on) from being registered.
-        if (!window.Store.Call || typeof window.Store.Call.on !== 'function') {
-            console.warn('[waaibot] Patching missing Store.Call with no-op');
-            window.Store.Call = { on: () => { }, get: () => null };
-        }
-
-        // Store.GroupMetadata may not exist in comet (v2.3000+) WhatsApp Web.
-        // getChatModel() calls Store.GroupMetadata.update(chatWid) to refresh
-        // group metadata before serializing. Without this stub, getChat() crashes
-        // with "Cannot read properties of undefined (reading 'update')".
-        // The no-op just skips the refresh — cached metadata is used instead.
-        if (!window.Store.GroupMetadata || typeof window.Store.GroupMetadata.update !== 'function') {
-            console.warn('[waaibot] Patching missing Store.GroupMetadata with no-op');
-            window.Store.GroupMetadata = { update: () => Promise.resolve() };
-        }
-
-        // Patch DownloadManager.downloadAndMaybeDecrypt to handle addAnnotations error.
-        // In newer WhatsApp Web, downloadAndMaybeDecrypt calls addAnnotations on a module
-        // that doesn't exist, causing "Cannot read properties of undefined (reading 'addAnnotations')".
-        // This wrapper catches that specific error and returns null, letting the Node-side fallback handle it.
-        if (window.Store.DownloadManager && window.Store.DownloadManager.downloadAndMaybeDecrypt) {
-            const _origDownloadAndMaybeDecrypt = window.Store.DownloadManager.downloadAndMaybeDecrypt.bind(window.Store.DownloadManager);
-            window.Store.DownloadManager.downloadAndMaybeDecrypt = async function (...args) {
+                return sockRef.sendMessage(jid, payload);
+            }
+        },
+        getChatById: async (id) => {
+            const jid = dbIdToJid(id);
+            if (isJidGroup(jid)) {
                 try {
-                    return await _origDownloadAndMaybeDecrypt(...args);
+                    const metadata = await sockRef.groupMetadata(jid);
+                    // Register LID→phone mappings from group metadata
+                    for (const p of metadata.participants) {
+                        if (p.lid && p.jid) registerLidMapping(p.lid, p.jid);
+                        if (p.id && p.jid && p.id !== p.jid) registerLidMapping(p.id, p.jid);
+                    }
+                    return {
+                        isGroup: true,
+                        name: metadata.subject,
+                        participants: metadata.participants.map(p => ({
+                            id: { _serialized: jidToDbId(p.jid || p.id) },
+                            isAdmin: p.admin === 'admin' || p.admin === 'superadmin',
+                            isSuperAdmin: p.admin === 'superadmin'
+                        })),
+                        description: metadata.desc || '',
+                        sendStateTyping: async () => {
+                            await sockRef.sendPresenceUpdate('composing', jid);
+                        }
+                    };
                 } catch (e) {
-                    if (e && e.message && e.message.includes('addAnnotations')) {
-                        console.warn('[waaibot] downloadAndMaybeDecrypt failed with addAnnotations error, returning null for Node-side fallback');
+                    return { isGroup: true, name: id, participants: [] };
+                }
+            }
+            return {
+                isGroup: false,
+                name: id,
+                sendStateTyping: async () => {
+                    await sockRef.sendPresenceUpdate('composing', jid);
+                }
+            };
+        },
+        getContactById: async (id) => {
+            const dbId = jidToDbId(id);
+            return {
+                id: { _serialized: dbId },
+                pushname: dbId.split('@')[0],
+                name: dbId.split('@')[0],
+                number: dbId.split('@')[0]
+            };
+        },
+        // Expose the raw sock for direct access when needed
+        _sock: sockRef,
+        // Compatibility with health.js status checks
+        get info() {
+            return {
+                wid: { _serialized: config.botUserId, user: config.botNumber },
+                pushname: config.botName
+            };
+        }
+    };
+}
+
+// =====================================================================
+// Message Adapter (wraps Baileys msg for downstream compatibility)
+// =====================================================================
+
+function createMessageAdapter(sockRef, msg) {
+    const body = getMessageText(msg);
+    const remoteJid = msg.key.remoteJid;
+    const isGroup = isJidGroup(remoteJid);
+    const rawParticipant = msg.key.participant || remoteJid;
+    const resolvedParticipant = msg.key.participantPn || msg.key.senderPn || resolveLid(rawParticipant);
+    const senderId = jidToDbId(resolvedParticipant);
+    const msgId = msg.key.id;
+    const baileysType = getMessageType(msg);
+
+    return {
+        id: { _serialized: msgId },
+        from: jidToDbId(remoteJid),
+        author: isGroup ? senderId : undefined,
+        body: body,
+        fromMe: msg.key.fromMe,
+        timestamp: Number(msg.messageTimestamp),
+        hasMedia: hasMedia(msg),
+        type: simplifyType(baileysType),
+        mentionedIds: msg.message?.extendedTextMessage?.contextInfo?.mentionedJid?.map(j => jidToDbId(resolveLid(j))) || [],
+        hasQuotedMsg: !!getQuotedInfo(msg),
+        _data: { notifyName: msg.pushName || 'Unknown User' },
+        duration: msg.message?.audioMessage?.seconds || msg.message?.pttMessage?.seconds || 0,
+        _rawMsg: msg,
+
+        getChat: async () => {
+            if (isGroup) {
+                try {
+                    const metadata = await sockRef.groupMetadata(remoteJid);
+                    // Register LID→phone mappings from group metadata
+                    for (const p of metadata.participants) {
+                        if (p.lid && p.jid) registerLidMapping(p.lid, p.jid);
+                        if (p.id && p.jid && p.id !== p.jid) registerLidMapping(p.id, p.jid);
+                    }
+                    return {
+                        isGroup: true,
+                        name: metadata.subject,
+                        participants: metadata.participants.map(p => ({
+                            id: { _serialized: jidToDbId(p.jid || p.id) },
+                            isAdmin: p.admin === 'admin' || p.admin === 'superadmin',
+                            isSuperAdmin: p.admin === 'superadmin'
+                        })),
+                        description: metadata.desc || '',
+                        createdAt: metadata.creation,
+                        sendStateTyping: async () => {
+                            await sockRef.sendPresenceUpdate('composing', remoteJid);
+                        }
+                    };
+                } catch (e) {
+                    return { isGroup: true, name: remoteJid, participants: [], sendStateTyping: async () => { } };
+                }
+            }
+            return {
+                isGroup: false,
+                name: msg.pushName || remoteJid,
+                participants: [],
+                sendStateTyping: async () => {
+                    await sockRef.sendPresenceUpdate('composing', remoteJid);
+                }
+            };
+        },
+
+        getQuotedMessage: async () => {
+            const info = getQuotedInfo(msg);
+            if (!info) return null;
+            return {
+                body: info.quotedBody,
+                author: jidToDbId(resolveLid(info.quotedParticipant)),
+                from: jidToDbId(remoteJid),
+                id: { _serialized: info.quotedMessageId },
+                hasMedia: !!info.quotedMessage?.imageMessage || !!info.quotedMessage?.audioMessage,
+                type: info.quotedMessage?.imageMessage ? 'image' : (info.quotedMessage?.audioMessage ? 'audio' : 'chat'),
+                _rawQuotedMsg: info.quotedMessage,
+                downloadMedia: async () => {
+                    try {
+                        const buffer = await downloadMediaMessage(
+                            { message: info.quotedMessage, key: { id: info.quotedMessageId, remoteJid, fromMe: false } },
+                            'buffer',
+                            {}
+                        );
+                        let type = 'imageMessage';
+                        if (info.quotedMessage?.audioMessage) type = 'audioMessage';
+                        if (info.quotedMessage?.videoMessage) type = 'videoMessage';
+                        if (info.quotedMessage?.documentMessage) type = 'documentMessage';
+                        if (info.quotedMessage?.stickerMessage) type = 'stickerMessage';
+
+                        const mediaMsg = info.quotedMessage[type];
+                        return {
+                            data: buffer.toString('base64'),
+                            mimetype: mediaMsg?.mimetype || 'application/octet-stream',
+                            filename: mediaMsg?.fileName || null,
+                            filesize: buffer.length
+                        };
+                    } catch (e) {
+                        logger.error('Media', `Quoted media download failed: ${e.message}`);
                         return null;
                     }
-                    throw e; // Re-throw other errors
                 }
             };
-            console.log('[waaibot] Patched DownloadManager.downloadAndMaybeDecrypt with addAnnotations fallback');
-        }
-    });
+        },
 
-    const result = await _originalAttachEventListeners();
-
-    // Wrap WWebJS.sendSeen so that failures don't prevent message sending.
-    // In comet WhatsApp Web, Store.SendSeen.sendSeen may crash accessing
-    // 'markedUnread' on an undefined property. sendSeen is called inside the
-    // sendMessage evaluate BEFORE the actual send — if it throws, the entire
-    // evaluate rejects and the message is never sent.
-    await this.pupPage.evaluate(() => {
-        if (window.WWebJS && window.WWebJS.sendSeen) {
-            const _origSendSeen = window.WWebJS.sendSeen;
-            window.WWebJS.sendSeen = async (chatId) => {
-                try {
-                    return await _origSendSeen(chatId);
-                } catch (e) {
-                    console.warn('[waaibot] sendSeen failed (non-fatal):', e.message);
-                }
-            };
-        }
-    });
-
-    return result;
-};
-
-client.initialize().catch(async (err) => {
-    logger.error('Bot', '='.repeat(50));
-    logger.error('Bot', 'CLIENT INITIALIZATION FAILED');
-    logger.error('Bot', '='.repeat(50));
-    if (err instanceof Error) {
-        logger.error('Bot', 'Error message: ' + err.message);
-        logger.error('Bot', 'Error name: ' + err.name);
-        logger.error('Bot', 'Error stack: ' + err.stack);
-    } else if (err === undefined) {
-        logger.error('Bot', 'Error is undefined - this usually means:');
-        logger.error('Bot', '  1. Puppeteer/Chrome crashed without throwing a proper error');
-        logger.error('Bot', '  2. Session data in ./tokens may be corrupted');
-        logger.error('Bot', '  3. Memory or resource issue on the server');
-    } else {
-        logger.error('Bot', 'Non-Error rejection value: ' + JSON.stringify(err, null, 2));
-        logger.error('Bot', 'Type: ' + typeof err);
-    }
-    logger.error('Bot', '='.repeat(50));
-
-    // Capture browser diagnostics before exiting
-    try {
-        if (client.pupPage && !client.pupPage.isClosed()) {
-            const diag = await client.pupPage.evaluate(() => ({
-                url: location.href,
-                title: document.title,
-                hasDebug: typeof window.Debug !== 'undefined',
-                debugVersion: window.Debug?.VERSION,
-                bodyText: document.body?.innerText?.substring(0, 500)
-            }));
-            logger.info('Browser', 'State at failure: ' + JSON.stringify(diag));
-        }
-    } catch (e) {
-        logger.error('Browser', 'Could not capture state: ' + e.message);
-    }
-
-    // Auth timeout or other init failure — exit for clean PM2 restart
-    // (no point waiting for the 3-minute ready timeout)
-    const errMsg = err instanceof Error ? err.message : String(err);
-    if (errMsg.includes('timeout') || errMsg.includes('auth timeout')) {
-        logger.warn('Bot', 'Auth timeout detected. Deleting tokens and exiting for clean restart...');
-        try {
-            const tokensPath = path.join(__dirname, '..', 'tokens');
-            if (fsSync.existsSync(tokensPath)) {
-                fsSync.rmSync(tokensPath, { recursive: true, force: true });
-                logger.info('Bot', 'Deleted stale tokens directory.');
+        downloadMedia: async () => {
+            try {
+                const buffer = await downloadMediaMessage(msg, 'buffer', {});
+                const mediaMsg = msg.message[baileysType];
+                return {
+                    data: buffer.toString('base64'),
+                    mimetype: mediaMsg?.mimetype || 'application/octet-stream',
+                    filename: mediaMsg?.fileName || null,
+                    filesize: buffer.length
+                };
+            } catch (e) {
+                logger.error('Media', `Download failed: ${e.message}`);
+                return null;
             }
-        } catch (e) {
-            logger.error('Bot', 'Error deleting tokens: ' + e.message);
         }
-        // Short delay to let logs flush
-        setTimeout(() => process.exit(1), 2000);
-    }
-});
+    };
+}
 
-function setupMessageHandler() {
-    if (messageHandlerSetup) {
-        logger.warn('Bot', 'setupMessageHandler called again — skipping duplicate registration');
-        return;
-    }
-    messageHandlerSetup = true;
-    client.on('message', async (message) => {
-        // Ignore messages sent by the bot itself to prevent infinite loops
-        if (message.fromMe) return;
+// =====================================================================
+// Message Handler
+// =====================================================================
 
-        // Dedup: WhatsApp Web store may fire 'add' twice for the same message
-        const msgId = message.id._serialized || message.id.id;
-        if (recentMessageIds.has(msgId)) {
-            logger.debug('Message', `Skipping duplicate message: ${msgId}`);
+async function handleIncomingMessage(sockRef, msg) {
+    // Ignore bot's own messages
+    if (msg.key.fromMe) return;
+
+    // Ignore status/broadcast
+    if (msg.key.remoteJid === 'status@broadcast') return;
+    if (!msg.message) return;
+
+    // Ignore protocol messages (reactions, receipts, etc.)
+    const contentType = getContentType(msg.message);
+    if (contentType === 'protocolMessage' || contentType === 'reactionMessage' || contentType === 'senderKeyDistributionMessage') return;
+
+    // Dedup
+    const msgId = msg.key.id;
+    if (recentMessageIds.has(msgId)) return;
+    recentMessageIds.add(msgId);
+    setTimeout(() => recentMessageIds.delete(msgId), MESSAGE_DEDUP_TTL);
+
+    updateLastMessageTime();
+
+    // Create adapter objects
+    const client = createClientAdapter(sockRef);
+    const message = createMessageAdapter(sockRef, msg);
+
+    logger.info('Message', `Received message: ${message.body}`);
+    const chat = await message.getChat();
+    logger.debug('Message', `Is group message: ${chat.isGroup}`);
+
+    const contact = getSafeContact(msg);
+    logger.debug('Message', `Sender: ${contact.id._serialized}`);
+
+    // Sync user data
+    const senderId = contact.id._serialized;
+    const profileName = contact.pushname || contact.name || 'Unknown User';
+    try {
+        await upsertUser(senderId, profileName);
+    } catch (error) {
+        logger.error('Message', 'Error syncing user data: ' + error.message);
+    }
+
+    // Passive auto-registration: ensure group/DM is in DB
+    try {
+        const chatName = chat.isGroup
+            ? (chat.name || 'Group Chat')
+            : (chat.name || contact.pushname || contact.name || 'Direct Message');
+        const regInfo = await getOrCreateGroupInfo(message.from, chatName);
+        if (chatName !== message.from && regInfo.group_name === regInfo.group_id) {
+            await updateGroupInfo(message.from, { group_name: chatName });
+        }
+    } catch (error) {
+        logger.error('Message', 'Error auto-registering chat: ' + error.message);
+    }
+
+    // For DMs, attach the contact name
+    if (!chat.isGroup) {
+        message.dmContactName = chat.name || contact.pushname || contact.name || 'Direct Message';
+    }
+
+    // Process and store all messages
+    try {
+        await processAndStoreMessage(client, message);
+    } catch (storeError) {
+        logger.error('Store', 'Failed to store message, continuing with bot logic: ' + storeError.message);
+    }
+
+    // Feed message to background processor (groups only)
+    if (chat.isGroup && backgroundProcessor) {
+        try {
+            backgroundProcessor.feedMessage(message.from);
+        } catch (bgErr) {
+            logger.error('Background', 'Error feeding message: ' + bgErr.message);
+        }
+    }
+
+    // --- Offline message detection ---
+    const msgTimestampMs = message.timestamp * 1000;
+    if (connectionOpenedAt > 0 && msgTimestampMs < connectionOpenedAt) {
+        const offlineMode = await getBotSetting('offline_message_mode') || 'last_trigger';
+        if (offlineMode === 'store_only') {
+            logger.info('Offline', `Stored offline message from ${senderId} in ${message.from} (sent ${new Date(msgTimestampMs).toISOString()}, connected ${new Date(connectionOpenedAt).toISOString()}) — skipping AI`);
             return;
         }
-        recentMessageIds.add(msgId);
-        setTimeout(() => recentMessageIds.delete(msgId), MESSAGE_DEDUP_TTL);
 
-        logger.info('Message', `Received message: ${message.body}`);
-        const chat = await message.getChat();
-        logger.debug('Message', `Is group message: ${chat.isGroup}`);
+        if (offlineMode === 'last_trigger' && chat.isGroup) {
+            // Detect mention/reply early for offline trigger tracking
+            const mentionedIds = message.mentionedIds || [];
+            const isBotMentioned = mentionedIds.includes(config.botUserId)
+                || message.body.includes(`@${config.botName}`)
+                || message.body.includes(`@${config.botNumber}`);
+            const quotedMessage = message.hasQuotedMsg ? await message.getQuotedMessage() : null;
+            const quotedAuthor = quotedMessage ? (quotedMessage.author || quotedMessage.from) : null;
+            const isReplyToBot = quotedAuthor ? (quotedAuthor === config.botUserId) : false;
 
-        // FIX: Use getSafeContact instead of message.getContact()
-        const contact = getSafeContact(message);
-        logger.debug('Message', `Sender: ${contact.id._serialized}`);
+            const groupInfo = await getOrCreateGroupInfo(message.from, chat.name || 'Group Chat');
+            const useActiveListening = groupInfo.active_listening_enabled === 1;
 
-        // --- NEW: Sync User Data ---
-        // Capture the user's current profile name on every message
-        const senderId = contact.id._serialized;
-        const profileName = contact.pushname || contact.name || 'Unknown User';
-        try {
-            await upsertUser(senderId, profileName);
-        } catch (error) {
-            logger.error('Message', 'Error syncing user data: ' + error.message);
-        }
-        // ---------------------------
+            const isTrigger = useActiveListening || isBotMentioned || isReplyToBot;
 
-        // --- Passive auto-registration: ensure group/DM is in DB ---
-        try {
-            const chatName = chat.isGroup
-                ? (chat.name || 'Group Chat')
-                : (chat.name || contact.pushname || contact.name || 'Direct Message');
-            const regInfo = await getOrCreateGroupInfo(message.from, chatName);
-            // Fix: retroactively update group name if it was stored as the raw group ID
-            if (chatName !== message.from && regInfo.group_name === regInfo.group_id) {
-                await updateGroupInfo(message.from, { group_name: chatName });
-            }
-        } catch (error) {
-            logger.error('Message', 'Error auto-registering chat: ' + error.message);
-        }
-        // ---------------------------
-
-        // For DMs, attach the contact name so it can be stored instead of "Direct Message"
-        if (!chat.isGroup) {
-            message.dmContactName = chat.name || contact.pushname || contact.name || 'Direct Message';
-        }
-
-        // Process and store all messages, regardless of bot involvement
-        try {
-            await processAndStoreMessage(client, message);
-        } catch (storeError) {
-            logger.error('Store', 'Failed to store message, continuing with bot logic: ' + storeError.message);
-        }
-
-        // Feed message to background processor (groups only, fire-and-forget)
-        if (chat.isGroup && backgroundProcessor) {
-            try {
-                backgroundProcessor.feedMessage(message.from);
-            } catch (bgErr) {
-                logger.error('Background', 'Error feeding message: ' + bgErr.message);
-            }
-        }
-
-        // FIX: Avoid message.getMentions() which triggers the crash
-        const mentionedIds = message.mentionedIds || [];
-
-        const isBotMentioned = mentionedIds.includes(config.botUserId)
-            || (config.botLidUserId && mentionedIds.includes(config.botLidUserId))
-            || message.body.includes(`@${config.botName}`);
-        logger.debug('Message', `Mention check: mentionedIds=${JSON.stringify(mentionedIds)}, botUserId=${config.botUserId}, botLid=${config.botLidUserId}, isBotMentioned=${isBotMentioned}`);
-        const quotedMessage = message.hasQuotedMsg ? await message.getQuotedMessage() : null;
-
-        // FIX: Safe way to check reply participant without crashing
-        // Check both regular user ID and LID — WhatsApp now uses LID for message authorship
-        const quotedAuthor = quotedMessage ? (quotedMessage.author || quotedMessage.from) : null;
-        const isReplyToBot = quotedAuthor
-            ? (quotedAuthor === config.botUserId
-                || (config.botLidUserId && quotedAuthor === config.botLidUserId))
-            : false;
-
-        if (quotedMessage) {
-            logger.debug('Message', `Reply check: quotedAuthor=${quotedAuthor}, botUserId=${config.botUserId}, botLid=${config.botLidUserId}, isReplyToBot=${isReplyToBot}`);
-        }
-
-        // Extract command from message body
-        const commandMatch = message.body.match(/!(\w+)/);
-        const hasCommand = commandMatch !== null;
-
-        if (hasCommand) {
-            const fullCommand = commandMatch[0]; // e.g., "!ping"
-            const commandName = commandMatch[1].toLowerCase(); // e.g., "ping"
-
-            // 1. !addme (Public Command)
-            if (commandName === 'addme') {
-                if (chat.isGroup) {
-                    const args = message.body.slice(fullCommand.length).trim();
-
-                    if (args.length > 0) {
-                        await setCustomAlias(senderId, args);
-                    }
-
-                    const storedAlias = await getUserAlias(senderId);
-
-                    await addAddRequest(senderId, storedAlias);
-                    await client.sendMessage(message.from, `Hi ${storedAlias}, your request to be added has been sent to the admins.`);
-                } else {
-                    await client.sendMessage(message.from, 'You can only use this command in a group with the bot.');
-                }
-                return;
+            if (isTrigger && groupInfo.is_active) {
+                offlineTriggerQueue.set(message.from, {
+                    message, client, isBotMentioned, isReplyToBot, useActiveListening
+                });
+                logger.info('Offline', `Tracked last trigger from ${senderId} in ${message.from} (active_listening=${useActiveListening}, mention=${isBotMentioned}, reply=${isReplyToBot})`);
             }
 
-            // Authorization Check (DB-backed)
-            const isAuthorized = await checkIsAuthorized(client, senderId);
-            const isAdmin = await checkIsAdmin(client, senderId);
+            // Reset debounce timer — process after burst settles
+            if (offlineTriggerTimer) clearTimeout(offlineTriggerTimer);
+            offlineTriggerTimer = setTimeout(() => {
+                offlineTriggerTimer = null;
+                processOfflineTriggers();
+            }, OFFLINE_TRIGGER_DEBOUNCE_MS);
 
-            // 2. !usage (Authorized Users OR Admins)
-            if (commandName === 'usage') {
+            return;
+        }
+        // Future: 'queue_all' mode would be handled here
+    }
+
+    // Mention/reply detection
+    const mentionedIds = message.mentionedIds || [];
+    const isBotMentioned = mentionedIds.includes(config.botUserId)
+        || message.body.includes(`@${config.botName}`)
+        || message.body.includes(`@${config.botNumber}`);
+    logger.debug('Message', `Mention check: mentionedIds=${JSON.stringify(mentionedIds)}, botUserId=${config.botUserId}, isBotMentioned=${isBotMentioned}`);
+
+    const quotedMessage = message.hasQuotedMsg ? await message.getQuotedMessage() : null;
+    const quotedAuthor = quotedMessage ? (quotedMessage.author || quotedMessage.from) : null;
+    const isReplyToBot = quotedAuthor ? (quotedAuthor === config.botUserId) : false;
+
+    if (quotedMessage) {
+        logger.debug('Message', `Reply check: quotedAuthor=${quotedAuthor}, botUserId=${config.botUserId}, isReplyToBot=${isReplyToBot}`);
+    }
+
+    // Command dispatch
+    const commandMatch = message.body.match(/!(\w+)/);
+    const hasCommand = commandMatch !== null;
+
+    if (hasCommand) {
+        const fullCommand = commandMatch[0];
+        const commandName = commandMatch[1].toLowerCase();
+
+        // Authorization check — public commands skip entirely, non-admin commands require authorized, rest require admin
+        const { commands: registeredCommands } = require('./commands/index');
+        const cmdEntry = registeredCommands.get(`!${commandName}`);
+
+        if (cmdEntry && !cmdEntry.public) {
+            const isAuthorized = await checkIsAuthorized(sockRef, senderId);
+            const isAdmin = await checkIsAdmin(sockRef, senderId);
+
+            if (!cmdEntry.adminOnly) {
                 if (!isAuthorized && !isAdmin) {
                     await client.sendMessage(message.from, `Sorry ${contact.pushname}, you are not authorized to use this command.`);
                     return;
                 }
-            }
-            // 3. All other commands (Admins Only)
-            else {
+            } else {
                 if (!isAdmin) {
                     logger.warn('Auth', `Unauthorized user ${senderId} (${contact.pushname}) attempted to use an admin command`);
                     await client.sendMessage(message.from, `Sorry ${contact.pushname}, only admins can use bot commands.`);
                     return;
                 }
             }
+        }
 
-            // Dispatch the command to the appropriate handler
-            await dispatch(`!${commandName}`, client, message, {
-                ...config,
-                messageQueueManager
-            });
+        await dispatch(`!${commandName}`, client, message, {
+            ...config,
+            messageQueueManager
+        });
 
-        } else if (chat.isGroup && (isBotMentioned || isReplyToBot)) {
-            // Group chat: bot invocation via mention or reply
-            // Check if authorization is enabled for this group
-            const groupInfo = await getOrCreateGroupInfo(message.from, chat.name || 'Group Chat');
+    } else if (chat.isGroup) {
+        const groupInfo = await getOrCreateGroupInfo(message.from, chat.name || 'Group Chat');
 
-            // Fix: retroactively update group name if it was stored as the raw group ID
-            if (chat.name && groupInfo.group_name === groupInfo.group_id) {
-                await updateGroupInfo(message.from, { group_name: chat.name });
+        if (chat.name && groupInfo.group_name === groupInfo.group_id) {
+            await updateGroupInfo(message.from, { group_name: chat.name });
+        }
+
+        if (!groupInfo.is_active) {
+            logger.debug('Message', `Skipping AI for inactive group ${message.from}`);
+            return;
+        }
+
+        // Global bot active check (prevents active listener LLM calls too)
+        const globalBotActive = await getBotSetting('bot_active');
+        if (globalBotActive === '0') {
+            logger.debug('Message', 'Bot is globally disabled — skipping AI');
+            return;
+        }
+
+        const useActiveListening = groupInfo.active_listening_enabled === 1;
+
+        if (useActiveListening) {
+            if (activeListener) {
+                try {
+                    activeListener.feedMessage(message.from, message, client, { isBotMentioned, isReplyToBot });
+                } catch (alErr) {
+                    logger.error('ActiveListener', 'Error feeding message: ' + alErr.message);
+                }
             }
-
-            // Skip AI for inactive (unconfigured) groups
-            if (!groupInfo.is_active) {
-                logger.debug('Message', `Skipping AI for inactive group ${message.from}`);
-                return;
-            }
-
-            const authCheckEnabled = groupInfo.authorization_check_enabled !== 0; // Default to true if undefined
+        } else if (isBotMentioned || isReplyToBot) {
+            const authCheckEnabled = groupInfo.authorization_check_enabled !== 0;
 
             if (!authCheckEnabled) {
-                // Authorization is disabled for this group - allow any member to invoke bot
                 await handleBotInvocation(client, message);
             } else {
-                // Authorization is enabled - check if user is authorized
-                const isAuthorized = await checkIsAuthorized(client, contact.id._serialized);
-                const isAdmin = await checkIsAdmin(client, contact.id._serialized);
+                const isAuthorized = await checkIsAuthorized(sockRef, contact.id._serialized);
+                const isAdmin = await checkIsAdmin(sockRef, contact.id._serialized);
 
                 if (isAuthorized || isAdmin) {
                     await handleBotInvocation(client, message);
@@ -869,23 +757,32 @@ function setupMessageHandler() {
                     logger.warn('Auth', `Unauthorized user ${contact.id._serialized} (${contact.pushname}) attempted to invoke bot`);
                 }
             }
+        }
 
-        } else if (!chat.isGroup) {
-            // 1-1 chat: allow admins to chat directly with the bot
-            const isAdmin = await checkIsAdmin(client, contact.id._serialized);
+    } else if (!chat.isGroup) {
+        // 1-1 chat: allow admins to chat directly with the bot
+        const isAdmin = await checkIsAdmin(sockRef, contact.id._serialized);
+        const globalBotActiveDm = await getBotSetting('bot_active');
+        if (globalBotActiveDm === '0') {
             if (isAdmin) {
-                await handleBotInvocation(client, message);
+                await client.sendMessage(message.from, `Hey! I'm currently offline. You can re-enable me from the admin panel or by sending *!start* in a group.`);
+            }
+            return;
+        }
+        if (isAdmin) {
+            await handleBotInvocation(client, message);
+        } else {
+            const isAuthorized = await checkIsAuthorized(sockRef, contact.id._serialized);
+            if (isAuthorized) {
+                await client.sendMessage(message.from, `Hey! DMs are only available for admins. You can talk to me in any group where I'm active.`);
             }
         }
-    });
-
-    process.on('SIGINT', async () => {
-        logger.info('Bot', 'Shutting down...');
-        if (backgroundProcessor) backgroundProcessor.destroy();
-        await closeDatabase(); // Close the database connection
-        process.exit(0);
-    });
+    }
 }
+
+// =====================================================================
+// Process & Store Message
+// =====================================================================
 
 async function processAndStoreMessage(client, message) {
     let imageId = null;
@@ -893,13 +790,12 @@ async function processAndStoreMessage(client, message) {
 
     if (message.hasMedia && message.type === 'image') {
         imageId = await processAndStoreImage(client, message);
-        message.imageId = imageId; // Attach ID to message object for bot context
+        message.imageId = imageId;
         messageText = `Sent image id: ${imageId}`;
     }
 
     let audioId = null;
     if (message.hasMedia && (message.type === 'audio' || message.type === 'ptt')) {
-        // Check audio duration cap before processing
         const groupInfo = await getOrCreateGroupInfo(message.from, message.groupInfo?.name || message.dmContactName || 'Unknown Group');
         const durationCap = groupInfo.audio_duration_cap;
         const audioDuration = message.duration || 0;
@@ -910,12 +806,16 @@ async function processAndStoreMessage(client, message) {
             message.audioDurationExceeded = true;
         } else {
             audioId = await processAndStoreAudio(client, message);
-            message.audioId = audioId; // Attach ID to message object for bot context
+            message.audioId = audioId;
             messageText = `Sent audio id: ${audioId}`;
         }
     }
 
-    const contact = getSafeContact(message);
+    const contact = {
+        id: { _serialized: message.author || message.from },
+        pushname: message._data.notifyName,
+        name: message._data.notifyName
+    };
     const quotedMessage = message.hasQuotedMsg ? await message.getQuotedMessage() : null;
 
     const newMessage = {
@@ -935,104 +835,18 @@ async function processAndStoreMessage(client, message) {
     addPhoneToUsernameMapping(contact.id._serialized, contact.pushname || contact.name || 'Unknown User');
 }
 
-async function processAndStoreImage(client, message) {
+// =====================================================================
+// Media Processing (simplified — no pupPage fallback needed)
+// =====================================================================
+
+async function processAndStoreImage(_client, message) {
     const msgId = message.id._serialized;
     try {
         logger.info('Image', `Downloading media for message ${msgId}...`);
-
-        // --- Attempt 1: Standard whatsapp-web.js downloadMedia() ---
-        let media = null;
-        try {
-            media = await message.downloadMedia();
-        } catch (downloadError) {
-            logger.warn('Image', `Standard downloadMedia() failed for ${msgId}: ${downloadError.message}`);
-        }
-
-        // --- Attempt 2: Fallback via pupPage.evaluate ---
-        // If standard path failed (e.g., addAnnotations error), try accessing
-        // the media blob directly through the WhatsApp model's own download mechanism.
-        if (!media || !media.data) {
-            logger.info('Image', `Trying fallback download for ${msgId}...`);
-            try {
-                const fallbackResult = await client.pupPage.evaluate(async (msgId) => {
-                    const msg = window.Store.Msg.get(msgId)
-                        || (await window.Store.Msg.getMessagesById([msgId]))?.messages?.[0];
-                    if (!msg) return null;
-
-                    // Trigger the model-level download (resolves media into mediaData)
-                    if (!msg.mediaData || msg.mediaData.mediaStage !== 'RESOLVED') {
-                        try {
-                            await msg.downloadMedia({
-                                downloadEvenIfExpensive: true,
-                                rmrReason: 1
-                            });
-                        } catch (e) {
-                            console.warn('[waaibot] Model downloadMedia failed:', e.message);
-                        }
-                    }
-
-                    // Try to get the blob from the media object (already decrypted in-browser)
-                    if (msg.mediaData && msg.mediaData.mediaBlob) {
-                        try {
-                            const blob = msg.mediaData.mediaBlob;
-                            // mediaBlob might be an OpaqueData instance; get the actual Blob
-                            const actualBlob = blob._blob || blob;
-                            if (actualBlob instanceof Blob) {
-                                const arrayBuf = await actualBlob.arrayBuffer();
-                                const bytes = new Uint8Array(arrayBuf);
-                                let binary = '';
-                                for (let i = 0; i < bytes.length; i++) {
-                                    binary += String.fromCharCode(bytes[i]);
-                                }
-                                return {
-                                    data: btoa(binary),
-                                    mimetype: msg.mimetype || 'image/jpeg',
-                                    filename: msg.filename || null,
-                                    filesize: bytes.length
-                                };
-                            }
-                        } catch (blobErr) {
-                            console.warn('[waaibot] Blob extraction failed:', blobErr.message);
-                        }
-                    }
-
-                    // Last resort: check if renderableUrl exists and try to fetch from it
-                    if (msg.mediaData && msg.mediaData.renderableUrl) {
-                        try {
-                            const response = await fetch(msg.mediaData.renderableUrl);
-                            const arrayBuf = await response.arrayBuffer();
-                            const bytes = new Uint8Array(arrayBuf);
-                            let binary = '';
-                            for (let i = 0; i < bytes.length; i++) {
-                                binary += String.fromCharCode(bytes[i]);
-                            }
-                            return {
-                                data: btoa(binary),
-                                mimetype: msg.mimetype || 'image/jpeg',
-                                filename: msg.filename || null,
-                                filesize: bytes.length
-                            };
-                        } catch (fetchErr) {
-                            console.warn('[waaibot] renderableUrl fetch failed:', fetchErr.message);
-                        }
-                    }
-
-                    return null;
-                }, msgId);
-
-                if (fallbackResult && fallbackResult.data) {
-                    logger.info('Image', `Fallback download succeeded for ${msgId} (${fallbackResult.filesize} bytes)`);
-                    media = fallbackResult;
-                } else {
-                    logger.warn('Image', `Fallback download returned no data for ${msgId}`);
-                }
-            } catch (fallbackError) {
-                logger.error('Image', `Fallback download failed for ${msgId}: ${fallbackError.message}`);
-            }
-        }
+        const media = await message.downloadMedia();
 
         if (!media || !media.data) {
-            logger.warn('Image', `All download attempts failed for ${msgId}`);
+            logger.warn('Image', `Download failed for ${msgId}`);
             return null;
         }
 
@@ -1040,107 +854,22 @@ async function processAndStoreImage(client, message) {
         const imageId = `img_${Date.now()}`;
         const imagePath = path.join(config.imageDirectory, `${imageId}.jpg`);
         await fs.writeFile(imagePath, imageBuffer);
-        logger.info('Image', `Stored image: ${imagePath} with ID: ${imageId} (${imageBuffer.length} bytes)`);
+        logger.info('Image', `Stored image: ${imagePath} (${imageBuffer.length} bytes)`);
         return imageId;
     } catch (error) {
         logger.error('Image', `Error storing image for ${msgId}: ${error.message}`);
-        logger.error('Image', `Stack: ${error.stack}`);
         return null;
     }
 }
 
-async function processAndStoreAudio(client, message) {
+async function processAndStoreAudio(_client, message) {
     const msgId = message.id._serialized;
     try {
         logger.info('Audio', `Downloading media for message ${msgId}...`);
-
-        // --- Attempt 1: Standard whatsapp-web.js downloadMedia() ---
-        let media = null;
-        try {
-            media = await message.downloadMedia();
-        } catch (downloadError) {
-            logger.warn('Audio', `Standard downloadMedia() failed for ${msgId}: ${downloadError.message}`);
-        }
-
-        // --- Attempt 2: Fallback via pupPage.evaluate ---
-        if (!media || !media.data) {
-            logger.info('Audio', `Trying fallback download for ${msgId}...`);
-            try {
-                const fallbackResult = await client.pupPage.evaluate(async (msgId) => {
-                    const msg = window.Store.Msg.get(msgId)
-                        || (await window.Store.Msg.getMessagesById([msgId]))?.messages?.[0];
-                    if (!msg) return null;
-
-                    if (!msg.mediaData || msg.mediaData.mediaStage !== 'RESOLVED') {
-                        try {
-                            await msg.downloadMedia({
-                                downloadEvenIfExpensive: true,
-                                rmrReason: 1
-                            });
-                        } catch (e) {
-                            console.warn('[waaibot] Model downloadMedia failed:', e.message);
-                        }
-                    }
-
-                    if (msg.mediaData && msg.mediaData.mediaBlob) {
-                        try {
-                            const blob = msg.mediaData.mediaBlob;
-                            const actualBlob = blob._blob || blob;
-                            if (actualBlob instanceof Blob) {
-                                const arrayBuf = await actualBlob.arrayBuffer();
-                                const bytes = new Uint8Array(arrayBuf);
-                                let binary = '';
-                                for (let i = 0; i < bytes.length; i++) {
-                                    binary += String.fromCharCode(bytes[i]);
-                                }
-                                return {
-                                    data: btoa(binary),
-                                    mimetype: msg.mimetype || 'audio/ogg',
-                                    filename: msg.filename || null,
-                                    filesize: bytes.length
-                                };
-                            }
-                        } catch (blobErr) {
-                            console.warn('[waaibot] Blob extraction failed:', blobErr.message);
-                        }
-                    }
-
-                    if (msg.mediaData && msg.mediaData.renderableUrl) {
-                        try {
-                            const response = await fetch(msg.mediaData.renderableUrl);
-                            const arrayBuf = await response.arrayBuffer();
-                            const bytes = new Uint8Array(arrayBuf);
-                            let binary = '';
-                            for (let i = 0; i < bytes.length; i++) {
-                                binary += String.fromCharCode(bytes[i]);
-                            }
-                            return {
-                                data: btoa(binary),
-                                mimetype: msg.mimetype || 'audio/ogg',
-                                filename: msg.filename || null,
-                                filesize: bytes.length
-                            };
-                        } catch (fetchErr) {
-                            console.warn('[waaibot] renderableUrl fetch failed:', fetchErr.message);
-                        }
-                    }
-
-                    return null;
-                }, msgId);
-
-                if (fallbackResult && fallbackResult.data) {
-                    logger.info('Audio', `Fallback download succeeded for ${msgId} (${fallbackResult.filesize} bytes)`);
-                    media = fallbackResult;
-                } else {
-                    logger.warn('Audio', `Fallback download returned no data for ${msgId}`);
-                }
-            } catch (fallbackError) {
-                logger.error('Audio', `Fallback download failed for ${msgId}: ${fallbackError.message}`);
-            }
-        }
+        const media = await message.downloadMedia();
 
         if (!media || !media.data) {
-            logger.warn('Audio', `All download attempts failed for ${msgId}`);
+            logger.warn('Audio', `Download failed for ${msgId}`);
             return null;
         }
 
@@ -1149,22 +878,26 @@ async function processAndStoreAudio(client, message) {
         const audioId = `audio_${Date.now()}`;
         const audioPath = path.join(config.audioDirectory, `${audioId}.${extension}`);
         await fs.writeFile(audioPath, audioBuffer);
-        logger.info('Audio', `Stored audio: ${audioPath} with ID: ${audioId} (${audioBuffer.length} bytes)`);
+        logger.info('Audio', `Stored audio: ${audioPath} (${audioBuffer.length} bytes)`);
         return audioId;
     } catch (error) {
         logger.error('Audio', `Error storing audio for ${msgId}: ${error.message}`);
-        logger.error('Audio', `Stack: ${error.stack}`);
         return null;
     }
 }
 
+// =====================================================================
+// Bot Invocation Handler
+// =====================================================================
+
 async function handleBotInvocation(client, message) {
-    const contact = getSafeContact(message);
+    // Global bot active check
+    const botActive = await getBotSetting('bot_active');
+    if (botActive === '0') {
+        logger.debug('Message', 'Bot is globally disabled — skipping AI response');
+        return;
+    }
 
-    // Authorization is already checked in the message handler
-    // This function is only called after authorization has been verified
-
-    // If the user's audio was rejected due to duration cap, notify and stop
     if (message.audioDurationExceeded) {
         const groupInfo = await getOrCreateGroupInfo(message.from, 'Unknown Group');
         const cap = groupInfo.audio_duration_cap || 900;
@@ -1177,7 +910,6 @@ async function handleBotInvocation(client, message) {
     const useExtendedHistory = message.body.includes(config.extendedHistoryCode);
     let historyLimit = useExtendedHistory ? config.extendedMessageHistoryLimit : config.messageHistoryLimit;
 
-    // Check for a group-specific custom limit, falling back to global default from settings
     try {
         const groupInfo = await getOrCreateGroupInfo(message.from, 'Unknown Group');
         if (!useExtendedHistory) {
@@ -1202,4 +934,441 @@ async function handleBotInvocation(client, message) {
     }
 }
 
-module.exports = { initializeBot };
+// =====================================================================
+// Offline "Last Trigger" Processing
+// =====================================================================
+
+function processOfflineTriggers() {
+    for (const [groupId, entry] of offlineTriggerQueue) {
+        logger.info('Offline', `Processing last trigger for group ${groupId}`);
+        try {
+            if (entry.useActiveListening && activeListener) {
+                activeListener.feedMessage(groupId, entry.message, entry.client, {
+                    isBotMentioned: entry.isBotMentioned,
+                    isReplyToBot: entry.isReplyToBot
+                });
+            } else {
+                handleBotInvocation(entry.client, entry.message);
+            }
+        } catch (err) {
+            logger.error('Offline', `Error processing offline trigger for ${groupId}: ${err.message}`);
+        }
+    }
+    offlineTriggerQueue.clear();
+}
+
+// =====================================================================
+// Health Check (simplified for Baileys)
+// =====================================================================
+
+function startHealthCheck() {
+    if (healthCheckInterval) return;
+    healthCheckInterval = setInterval(async () => {
+        if (connectionStatus !== 'ready') return;
+        const silentMs = Date.now() - lastMessageReceivedAt;
+        if (silentMs > HEALTH_CHECK_STALE_THRESHOLD_MS) {
+            try {
+                await sock.sendPresenceUpdate('available');
+                logger.debug('HealthCheck', `Presence ping sent (${Math.round(silentMs / 1000)}s since last message)`);
+            } catch (e) {
+                logger.warn('HealthCheck', `Presence ping failed: ${e.message}`);
+            }
+        }
+    }, HEALTH_CHECK_INTERVAL_MS);
+}
+
+// =====================================================================
+// Socket Creation & Connection
+// =====================================================================
+
+let baileysOutdatedChecked = false; // only check once per process lifetime
+let isStartingSocket = false; // guard against concurrent startSocket() calls
+
+async function startSocket() {
+    // Prevent concurrent socket creation (causes 440 "connectionReplaced" loops)
+    if (isStartingSocket) {
+        logger.debug('Bot', 'startSocket() already in progress, skipping duplicate call');
+        return;
+    }
+    isStartingSocket = true;
+
+    try {
+        // Clean up previous socket before creating a new one
+        if (sock) {
+            try {
+                sock.ev.removeAllListeners();
+                sock.end(undefined);
+            } catch (_) { /* ignore cleanup errors */ }
+            sock = null;
+        }
+
+        await _startSocketInternal();
+    } finally {
+        isStartingSocket = false;
+    }
+}
+
+async function _startSocketInternal() {
+    const { state, saveCreds } = await useMultiFileAuthState(config.authSessionPath);
+
+    let version;
+    try {
+        ({ version } = await fetchLatestBaileysVersion());
+        logger.info('Bot', `Using WA version: ${version.join('.')}`);
+    } catch (e) {
+        logger.warn('Bot', `Could not fetch latest version, using default: ${e.message}`);
+    }
+
+    sock = makeWASocket({
+        auth: state,
+        ...(version && { version }),
+        logger: pino({ level: 'silent' }),
+        browser: ['Chrome', 'Chrome', '130.0.0'],
+        markOnlineOnConnect: true,
+        generateHighQualityLinkPreview: false,
+        getMessage: async () => {
+            // Required for retries — return message from DB if available
+            return undefined;
+        }
+    });
+
+    // Save credentials when they update
+    sock.ev.on('creds.update', saveCreds);
+
+    // Connection state changes
+    sock.ev.on('connection.update', async ({ connection, lastDisconnect, qr }) => {
+        if (qr) {
+            lastQr = qr;
+            try {
+                lastQrDataUrl = await QRCode.toDataURL(qr);
+            } catch (e) { /* ignore */ }
+            connectionStatus = 'qr';
+            logger.info('Bot', '='.repeat(50));
+            logger.info('Bot', 'QR CODE READY — Scan with WhatsApp');
+            logger.info('Bot', '='.repeat(50));
+        }
+
+        if (connection === 'connecting') {
+            connectionStatus = 'loading';
+            logger.info('Bot', 'Connecting to WhatsApp...');
+        }
+
+        if (connection === 'open') {
+            lastQr = null;
+            lastQrDataUrl = null;
+            connectionStatus = 'ready';
+            reconnectAttempts = 0;
+            protocolFailures = 0;
+            connectionAlert = null; // clear any previous alert on successful connection
+            connectionOpenedAt = Date.now();
+
+            // Check for Baileys updates in background (non-blocking, once per process)
+            if (!baileysOutdatedChecked) {
+                baileysOutdatedChecked = true;
+                checkAndUpdateBaileysIfNeeded().catch(() => {});
+            }
+
+            logger.info('Bot', 'Connected to WhatsApp!');
+
+            try {
+                await initializeBot();
+
+                // Auto-detect bot identity
+                if (sock.user) {
+                    // Prefer phone JID over LID for bot identity
+                    const rawId = sock.user.jid || sock.user.id;
+                    const normalizedId = jidNormalizedUser(rawId);
+                    const detectedNumber = normalizedId.split('@')[0];
+                    const detectedPushname = sock.user.name || '';
+                    const detectedUserId = jidToDbId(normalizedId);
+
+                    // Register LID→phone mapping for the bot itself
+                    if (sock.user.lid) {
+                        registerLidMapping(sock.user.lid, normalizedId);
+                        logger.info('Bot', `Registered bot LID mapping: ${sock.user.lid} → ${normalizedId}`);
+                    }
+                    if (sock.user.id !== normalizedId) {
+                        registerLidMapping(sock.user.id, normalizedId);
+                    }
+
+                    await setBotSetting('bot_user_id', detectedUserId);
+                    await setBotSetting('bot_number', detectedNumber);
+                    await setBotSetting('bot_pushname', detectedPushname);
+
+                    const existingName = await getBotSetting('bot_name');
+                    if (!existingName) {
+                        await setBotSetting('bot_name', detectedPushname || config.botName);
+                    }
+
+                    config.botUserId = detectedUserId;
+                    config.botNumber = detectedNumber;
+                    config.botName = (await getBotSetting('bot_name')) || config.botName;
+
+                    addPhoneToUsernameMapping(config.botUserId, config.botName);
+                    logger.info('Bot', `Bot identity: ${config.botName} (${detectedNumber}, ${detectedUserId})`);
+                }
+
+                // Set presence available
+                try {
+                    await sock.sendPresenceUpdate('available');
+                } catch (e) {
+                    logger.warn('Bot', 'Could not set presence available: ' + e.message);
+                }
+
+                lastMessageReceivedAt = Date.now();
+                startHealthCheck();
+
+                logger.info('Bot', 'Bot successfully started and ready to receive messages!');
+            } catch (error) {
+                logger.error('Bot', `Error during bot initialization: ${error.message}`);
+                logger.error('Bot', error.stack);
+            }
+        }
+
+        if (connection === 'close') {
+            const statusCode = lastDisconnect?.error?.output?.statusCode;
+            const errorMessage = lastDisconnect?.error?.message || '';
+            lastQr = null;
+            lastQrDataUrl = null;
+
+            if (healthCheckInterval) {
+                clearInterval(healthCheckInterval);
+                healthCheckInterval = null;
+            }
+
+            // Protocol-level errors that suggest Baileys/bot code needs updating
+            // These are NOT network issues — Meta changed something server-side
+            const isProtocolError = [410, 411, 428, 500, 501, 502, 503].includes(statusCode);
+
+            if (statusCode === DisconnectReason.loggedOut || statusCode === 405) {
+                connectionStatus = 'disconnected';
+                logger.warn('Bot', `Session invalid (code=${statusCode}). Clearing auth session for re-authentication...`);
+                try {
+                    await fs.rm(config.authSessionPath, { recursive: true, force: true });
+                } catch (e) {
+                    logger.error('Bot', `Failed to delete auth session: ${e.message}`);
+                }
+                reconnectAttempts = 0;
+                protocolFailures = 0;
+                setTimeout(() => startSocket(), 2000);
+            } else if (isProtocolError) {
+                protocolFailures++;
+                reconnectAttempts++;
+                logger.warn('Bot', `Protocol error (code=${statusCode}, msg="${errorMessage}"). Protocol failure #${protocolFailures}`);
+
+                if (protocolFailures >= PROTOCOL_FAILURE_THRESHOLD) {
+                    logger.error('Bot', `Protocol failures exceeded threshold (${protocolFailures}). Attempting auto-update...`);
+
+                    // Try updating within semver range first, then check if a major version exists
+                    updateBaileys().then(async (updated) => {
+                        // Check if there's a newer major version beyond our semver range
+                        const pkg = await checkBaileysLatest();
+                        const latestIsStable = pkg && pkg.latest && !pkg.latest.includes('-');
+                        const hasMajorUpdate = latestIsStable && pkg.current !== pkg.latest && pkg.wanted !== pkg.latest;
+
+                        if (updated && !hasMajorUpdate) {
+                            // Minor/patch update was installed
+                            connectionAlert = {
+                                type: 'warning',
+                                message: `WhatsApp library was auto-updated after repeated protocol errors (${statusCode}). Please restart the bot (Ctrl+C then "npm start") to apply the update.`
+                            };
+                            logger.warn('Bot', '');
+                            logger.warn('Bot', '========================================================');
+                            logger.warn('Bot', '  Baileys was auto-updated due to protocol errors.');
+                            logger.warn('Bot', '  Please restart the bot to apply the update:');
+                            logger.warn('Bot', '  Press Ctrl+C, then run "npm start"');
+                            logger.warn('Bot', '========================================================');
+                            logger.warn('Bot', '');
+                        } else if (hasMajorUpdate) {
+                            // Major version available — user needs to upgrade manually
+                            connectionAlert = {
+                                type: 'error',
+                                message: `WhatsApp connection is failing (error ${statusCode}). `
+                                    + `A new major version of the WhatsApp library is available (${pkg.current} → ${pkg.latest}). `
+                                    + 'Run "git pull && npm install" in the bot folder and restart.'
+                            };
+                            logger.error('Bot', '');
+                            logger.error('Bot', '========================================================');
+                            logger.error('Bot', `  Baileys major update available: ${pkg.current} → ${pkg.latest}`);
+                            logger.error('Bot', '  This likely fixes the protocol errors.');
+                            logger.error('Bot', '  To upgrade, run:');
+                            logger.error('Bot', '    git pull && npm install');
+                            logger.error('Bot', '  Then restart with "npm start"');
+                            logger.error('Bot', '========================================================');
+                            logger.error('Bot', '');
+                        } else {
+                            connectionAlert = {
+                                type: 'error',
+                                message: `WhatsApp connection is failing repeatedly (error ${statusCode}). `
+                                    + 'Auto-update found no new version. Try running "git pull && npm install" in the bot folder and restarting.'
+                            };
+                        }
+
+                        // Keep retrying regardless
+                        connectionStatus = 'reconnecting';
+                        setTimeout(() => startSocket(), MAX_RECONNECT_DELAY);
+                    });
+                    return;
+                }
+
+                // Below threshold — keep retrying with backoff
+                connectionStatus = 'reconnecting';
+                const delay = Math.min(1000 * Math.pow(2, reconnectAttempts - 1), MAX_RECONNECT_DELAY);
+                logger.info('Bot', `Reconnecting in ${delay}ms (attempt ${reconnectAttempts})...`);
+                setTimeout(() => startSocket(), delay);
+            } else {
+                // Recoverable errors (network issues, temporary server problems, etc.)
+                // Reset protocol failure counter since this is a different kind of error
+                protocolFailures = 0;
+                connectionStatus = 'reconnecting';
+                reconnectAttempts++;
+                const delay = Math.min(1000 * Math.pow(2, reconnectAttempts - 1), MAX_RECONNECT_DELAY);
+                logger.info('Bot', `Disconnected (code=${statusCode}). Reconnecting in ${delay}ms (attempt ${reconnectAttempts})...`);
+                setTimeout(() => startSocket(), delay);
+            }
+        }
+    });
+
+    // LID-to-phone mapping from contacts
+    sock.ev.on('contacts.upsert', (contacts) => {
+        for (const c of contacts) {
+            if (c.lid && c.jid) registerLidMapping(c.lid, c.jid);
+            if (c.lid && c.id && c.id.endsWith('@s.whatsapp.net')) registerLidMapping(c.lid, c.id);
+            if (c.id?.endsWith('@lid') && c.jid) registerLidMapping(c.id, c.jid);
+        }
+        logger.debug('Bot', `LID map updated from contacts.upsert (${lidToPhone.size} entries)`);
+    });
+
+    sock.ev.on('contacts.update', (contacts) => {
+        for (const c of contacts) {
+            if (c.lid && c.jid) registerLidMapping(c.lid, c.jid);
+            if (c.id?.endsWith('@lid') && c.jid) registerLidMapping(c.id, c.jid);
+        }
+    });
+
+    // Direct phone number sharing event
+    sock.ev.on('chats.phoneNumberShare', ({ lid, jid }) => {
+        registerLidMapping(lid, jid);
+        logger.debug('Bot', `Phone number shared: ${lid} → ${jid}`);
+    });
+
+    // Extract LID mappings from message keys
+    sock.ev.on('messages.upsert', ({ messages: msgs }) => {
+        for (const msg of msgs) {
+            const key = msg.key;
+            if (key.participantLid && key.participantPn) {
+                registerLidMapping(key.participantLid, key.participantPn);
+            }
+            if (key.senderLid && key.senderPn) {
+                registerLidMapping(key.senderLid, key.senderPn);
+            }
+        }
+    });
+
+    // Message handler
+    // 'notify' = real-time messages, 'append' = offline catch-up messages
+    sock.ev.on('messages.upsert', async ({ messages, type }) => {
+        if (type !== 'notify' && type !== 'append') return;
+
+        for (const msg of messages) {
+            try {
+                await handleIncomingMessage(sock, msg);
+            } catch (err) {
+                logger.error('Message', `Unhandled error in message handler: ${err.message}`);
+                logger.error('Message', err.stack);
+            }
+        }
+    });
+}
+
+// =====================================================================
+// Unhandled Rejection Handler
+// =====================================================================
+
+process.on('unhandledRejection', (reason, promise) => {
+    logger.error('Bot', 'Unhandled Rejection at: ' + promise);
+    logger.error('Bot', 'Reason: ' + (reason instanceof Error ? reason.stack : JSON.stringify(reason)));
+});
+
+// =====================================================================
+// Start Admin Panel & Socket
+// =====================================================================
+
+(async () => {
+    try {
+        await getDatabase();
+        const { startAdminServer } = require('./admin/admin-server');
+        await startAdminServer(config, {
+            get whatsappClient() {
+                return sock ? createClientAdapter(sock) : null;
+            },
+            get messageQueueManager() { return messageQueueManager; },
+            resolveLid
+        });
+    } catch (err) {
+        logger.error('Admin', 'Error starting admin panel: ' + err.message);
+    }
+})();
+
+// Only auto-start WhatsApp if setup is complete; otherwise wait for the setup wizard
+(async () => {
+    try {
+        const setupComplete = await getBotSetting('setup_complete');
+        if (setupComplete === '1' && process.env.GEMINI_API_KEY) {
+            logger.info('Bot', 'Starting Baileys WhatsApp client...');
+            startSocket();
+        } else {
+            logger.info('Bot', 'Setup not complete — waiting for setup wizard at http://localhost:' + config.adminPort);
+        }
+    } catch (err) {
+        logger.error('Bot', 'Error checking setup state: ' + err.message);
+        // Fall back to starting if we can't check
+        if (process.env.GEMINI_API_KEY) startSocket();
+    }
+})();
+
+// Graceful shutdown
+let isShuttingDown = false;
+async function gracefulShutdown(signal) {
+    if (isShuttingDown) return;
+    isShuttingDown = true;
+    logger.info('Bot', `Shutting down (${signal})...`);
+    if (healthCheckInterval) clearInterval(healthCheckInterval);
+    if (backgroundProcessor) backgroundProcessor.destroy();
+    if (activeListener) activeListener.destroy();
+    try { sock?.end(undefined); } catch (_) { /* ignore */ }
+    // Flush pending token usage writes before closing the database
+    const trackers = [
+        messageQueueManager?.tokenUsageTracker,
+        backgroundProcessor?.tokenUsageTracker,
+        activeListener?.tokenUsageTracker,
+    ];
+    for (const tracker of trackers) {
+        try { if (tracker) await tracker.forceCommit(); } catch (_) { /* ignore */ }
+    }
+    await closeDatabase();
+    process.exit(0);
+}
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+
+// Export for connection.js and other modules
+module.exports = {
+    initializeBot,
+    getConnectionState: () => ({
+        status: connectionStatus,
+        lastQr,
+        lastQrDataUrl,
+        sock,
+        alert: connectionAlert,
+        get info() {
+            return sock?.user ? {
+                pushname: sock.user.name || config.botName,
+                phone: extractNumber(sock.user.id)
+            } : null;
+        }
+    }),
+    startSocket,
+    getSock: () => sock,
+    resolveLid,
+};

@@ -34,6 +34,12 @@
         <progress id="loading-progress" value="0" max="100"></progress>
         <p id="loading-message" style="color:#999;"></p>
     </div>
+
+    <!-- Connection alert banner (protocol errors, update needed) -->
+    <div id="connection-alert" style="display:none; margin-top:1rem; padding:0.75rem 1rem; border-radius:0.25rem; border-left:4px solid #c62828; background:#fde8e8; color:#b71c1c; font-size:0.9rem; line-height:1.5;">
+        <strong>Action needed:</strong>
+        <span id="connection-alert-message"></span>
+    </div>
 </article>
 
 <%- include('footer') %>
