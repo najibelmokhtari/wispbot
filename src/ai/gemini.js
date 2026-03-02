@@ -8,22 +8,38 @@ const logger = require('../logger');
 
 require('dotenv').config();
 
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
+let GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 const MAX_RETRIES = 3;
 const RETRY_DELAY = 1000; // 1 second
 
 // Initialize the Google Generative AI client
-logger.debug('Gemini', 'Loading Gemini API Key...');
-logger.debug('Gemini', `GEMINI_API_KEY present: ${!!GEMINI_API_KEY}`);
-if (GEMINI_API_KEY) {
-    logger.debug('Gemini', `GEMINI_API_KEY length: ${GEMINI_API_KEY.length}`);
-    logger.debug('Gemini', `GEMINI_API_KEY suffix: ${GEMINI_API_KEY.slice(-4)}`);
-} else {
-    logger.error('Gemini', 'GEMINI_API_KEY is missing or undefined!');
+let genAI = null;
+
+function initializeGemini(apiKey) {
+    if (!apiKey) {
+        logger.warn('Gemini', 'GEMINI_API_KEY is missing — bot will not respond until configured via setup wizard.');
+        genAI = null;
+        return;
+    }
+    logger.debug('Gemini', `Initializing Gemini client (key suffix: ${apiKey.slice(-4)})`);
+    GEMINI_API_KEY = apiKey;
+    process.env.GEMINI_API_KEY = apiKey;
+    genAI = new GoogleGenerativeAI(apiKey);
 }
-const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
+
+// Re-initialize with a new key (called from setup wizard)
+function reinitializeGemini(newKey) {
+    initializeGemini(newKey);
+    logger.info('Gemini', 'Gemini client re-initialized with new API key.');
+}
+
+// Initial setup
+initializeGemini(GEMINI_API_KEY);
 
 async function callGeminiAPI(context, config, systemPrompt) {
+    if (!genAI) {
+        throw new Error('Gemini API key not configured. Complete the setup wizard first.');
+    }
     const userPrefixPrompt = await readPromptFile(path.join('prompts', 'system', 'user_prefix_prompt.txt'));
 
     const formattedMessages = processMessageHistory(context.recentMessages, config);
@@ -114,15 +130,19 @@ async function callGeminiAPI(context, config, systemPrompt) {
 
     // Handle Quoted Media Notes
     if (context.quotedImageId) {
-        userMessage += `\nNote: The user's message is in reply to an image with ID ${context.quotedImageId}.`;
+        if (context.imageEnabled) {
+            userMessage += `\nNote: The user's message is in reply to an image with ID ${context.quotedImageId}.`;
+        } else {
+            userMessage += `\nNote: The user's message is in reply to an image with ID ${context.quotedImageId}, but image processing is currently disabled for this group.`;
+        }
     }
 
     if (context.quotedAudioId) {
         if (context.audioEnabled) {
             if (context.audioHistoryMode === 'tagged') {
-                userMessage += `\nNote: The user's message is in reply to an audio message with ID ${context.quotedAudioId}. The audio content is attached to this request.`;
+                userMessage += `\nNote: The user's message is in reply to an audio message with ID ${context.quotedAudioId}. The audio content is attached to this request. See the "(Audio: ${context.quotedAudioId})" marker in the recent messages above for when it was sent.`;
             } else {
-                userMessage += `\nNote: The user's message is in reply to an audio message with ID ${context.quotedAudioId}.`;
+                userMessage += `\nNote: The user's message is in reply to an audio message with ID ${context.quotedAudioId}. See the "(Audio: ${context.quotedAudioId})" marker in the recent messages above for when it was sent.`;
             }
         } else {
             userMessage += `\nNote: The user's message is in reply to an audio message with ID ${context.quotedAudioId}, but audio processing is currently disabled for this group.`;
@@ -131,12 +151,16 @@ async function callGeminiAPI(context, config, systemPrompt) {
 
     // Handle Current Message Media Notes
     if (context.currentImageId) {
-        userMessage += `\nNote: The user attached an image to this message (ID: ${context.currentImageId}).`;
+        if (context.imageEnabled) {
+            userMessage += `\nNote: The user attached an image to this message (ID: ${context.currentImageId}).`;
+        } else {
+            userMessage += `\nNote: The user attached an image (ID: ${context.currentImageId}), but image processing is disabled.`;
+        }
     }
 
     if (context.currentAudioId) {
         if (context.audioEnabled) {
-            userMessage += `\nNote: The user attached an audio message (ID: ${context.currentAudioId}) to this request.`;
+            userMessage += `\nNote: The user's current message includes an audio message (ID: ${context.currentAudioId}). See the "(Audio: ${context.currentAudioId})" marker in the recent messages above for its exact position in the conversation timeline.`;
         } else {
             userMessage += `\nNote: The user attached an audio message (ID: ${context.currentAudioId}), but audio processing is disabled.`;
         }
@@ -163,14 +187,38 @@ async function callGeminiAPI(context, config, systemPrompt) {
         }
     };
 
-    // Attach Quoted Image
-    if (context.quotedImageId) {
-        await attachImage(context.quotedImageId);
-    }
+    // Attach images based on image history mode
+    if (context.imageEnabled && context.imageHistoryMode === 'history') {
+        // Collect image IDs from recent messages (excluding current message's image)
+        const historyImageIds = [];
+        for (const msg of context.recentMessages) {
+            if (msg.imageId && msg.imageId !== context.currentImageId) {
+                historyImageIds.push(msg.imageId);
+            }
+        }
+        // Take the last X image IDs
+        const imgCount = context.imageHistoryCount || 1;
+        const imageIdsToAttach = historyImageIds.slice(-imgCount);
 
-    // Attach Current Image
-    if (context.currentImageId) {
-        await attachImage(context.currentImageId);
+        if (imageIdsToAttach.length > 0) {
+            userMessage += `\nNote: The last ${imageIdsToAttach.length} image(s) from the conversation history are attached: ${imageIdsToAttach.join(', ')}. Check the "(Image: <image_id>)" markers in the recent messages above to see exactly when each image was shared in the conversation timeline.`;
+            for (const imageId of imageIdsToAttach) {
+                await attachImage(imageId);
+            }
+        }
+
+        // Always attach current image if present
+        if (context.currentImageId) {
+            await attachImage(context.currentImageId);
+        }
+    } else if (context.imageEnabled) {
+        // Tagged mode: only attach quoted and current image (original behavior)
+        if (context.quotedImageId) {
+            await attachImage(context.quotedImageId);
+        }
+        if (context.currentImageId) {
+            await attachImage(context.currentImageId);
+        }
     }
 
     // Helper to attach audio part
@@ -204,7 +252,7 @@ async function callGeminiAPI(context, config, systemPrompt) {
             const audioIdsToAttach = historyAudioIds.slice(-count);
 
             if (audioIdsToAttach.length > 0) {
-                userMessage += `\nNote: The last ${audioIdsToAttach.length} audio message(s) from the conversation history are attached: ${audioIdsToAttach.join(', ')}.`;
+                userMessage += `\nNote: The last ${audioIdsToAttach.length} audio message(s) from the conversation history are attached: ${audioIdsToAttach.join(', ')}. Check the "(Audio: <audio_id>)" markers in the recent messages above to see exactly when each audio was sent in the conversation timeline.`;
                 for (const audioId of audioIdsToAttach) {
                     await attachAudio(audioId);
                 }
@@ -329,4 +377,8 @@ async function getAudioData(config, audioId) {
     return null;
 }
 
-module.exports = { callGeminiAPI };
+function getGenAI() {
+    return genAI;
+}
+
+module.exports = { callGeminiAPI, reinitializeGemini, getGenAI };

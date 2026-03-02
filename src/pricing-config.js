@@ -16,7 +16,7 @@ const PRICING_RATES = {
         output: 3.00,      // $3.00 / 1M output tokens
         cache_read: 0.05   // $0.05 / 1M cached input tokens
     },
-    'gemini-3-pro-preview': {
+    'gemini-3.1-pro-preview': {
         input: 2.00,
         output: 12.00,
         cache_read: 0.2
@@ -31,8 +31,10 @@ const PRICING_RATES = {
 
 // TTS Pricing Configuration
 const TTS_PRICING = {
-    'gemini-2.5-flash-tts': { input_per_1m: 0.50, output_per_1m: 10.00 },
-    'gemini-2.5-pro-tts':   { input_per_1m: 1.00, output_per_1m: 20.00 },
+    'gemini-2.5-flash-tts':         { input_per_1m: 0.50, output_per_1m: 10.00 },
+    'gemini-2.5-flash-preview-tts': { input_per_1m: 0.50, output_per_1m: 10.00 },
+    'gemini-2.5-pro-tts':           { input_per_1m: 1.00, output_per_1m: 20.00 },
+    'gemini-2.5-pro-preview-tts':   { input_per_1m: 1.00, output_per_1m: 20.00 },
     'studio': 160.00,
     'neural2': 16.00,
     'wavenet': 16.00,
@@ -116,8 +118,8 @@ const AVAILABLE_MODELS = {
         displayName: 'Gemini 3 Flash Preview',
         description: 'Fast next-gen model'
     },
-    'gemini-3-pro-preview': {
-        displayName: 'Gemini 3 Pro Preview',
+    'gemini-3.1-pro-preview': {
+        displayName: 'Gemini 3.1 Pro Preview',
         description: 'Most capable next-gen model'
     },
 };

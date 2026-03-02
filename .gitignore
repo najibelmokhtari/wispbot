@@ -3,12 +3,15 @@ node_modules/
 
 # Environment & secrets
 .env
+.env.*
+!.env.example
 ecosystem.config.js
 
 # WhatsApp session data
 .wwebjs_auth/
 .wwebjs_cache/
 tokens/
+auth_session/
 
 # Runtime data
 data/
@@ -20,13 +23,16 @@ authorized_numbers*.txt
 admin_numbers.txt
 
 # Temporary files
-temp_images/
-temp_audio/
+images/
+audio/
 
 # Group-specific AI context files (contain personal information)
 # Keep the example template but ignore real group files
 prompts/group_contexts/*
 !prompts/group_contexts/example.txt
+
+# Community personas repo (separate git repo)
+community-personas-repo/
 
 # OS / IDE junk
 .DS_Store
@@ -34,6 +40,7 @@ prompts/group_contexts/*
 .claude/
 
 # Personal scripts & server shortcuts
+shell/
 connect_prod.sh
 qrcode.sh
 

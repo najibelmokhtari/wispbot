@@ -186,7 +186,7 @@ async function main() {
                 SUM(cached_tokens) as total_cached,
                 SUM(cost_usd) as total_cost,
                 SUM(CASE WHEN extended_history_used THEN 1 ELSE 0 END) as extended_history_count
-            FROM claude_api_calls
+            FROM llm_api_calls
             WHERE ${whereClause}
         `, queryParams);
 
@@ -208,7 +208,7 @@ async function main() {
                 SUM(input_tokens) as input_tokens,
                 SUM(output_tokens) as output_tokens,
                 SUM(cost_usd) as cost
-            FROM claude_api_calls
+            FROM llm_api_calls
             WHERE ${whereClause}
             GROUP BY group_id
             ORDER BY cost DESC
@@ -241,7 +241,7 @@ async function main() {
                 SUM(c.input_tokens) as input_tokens,
                 SUM(c.output_tokens) as output_tokens,
                 SUM(c.cost_usd) as cost
-            FROM claude_api_calls c
+            FROM llm_api_calls c
             LEFT JOIN users u ON c.user_id = u.user_id
             WHERE ${whereClause.replace(/c\./g, '')}
             GROUP BY c.user_id
@@ -275,7 +275,7 @@ async function main() {
                 provider,
                 COUNT(*) as calls,
                 SUM(cost_usd) as cost
-            FROM claude_api_calls
+            FROM llm_api_calls
             WHERE ${whereClause}
             GROUP BY ai_model
             ORDER BY cost DESC

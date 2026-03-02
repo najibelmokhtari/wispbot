@@ -24,7 +24,7 @@ async function handler(client, message, config) {
                     SUM(cached_tokens) as cached,
                     SUM(cost_usd) as cost,
                     SUM(CASE WHEN extended_history_used THEN 1 ELSE 0 END) as ext_history
-                FROM claude_api_calls
+                FROM llm_api_calls
                 WHERE group_id = ? AND user_id = ?
             `, [targetGroupId, senderId]);
 
@@ -36,7 +36,7 @@ async function handler(client, message, config) {
                     SUM(cached_tokens) as cached,
                     SUM(cost_usd) as cost,
                     SUM(CASE WHEN extended_history_used THEN 1 ELSE 0 END) as ext_history
-                FROM claude_api_calls
+                FROM llm_api_calls
                 WHERE group_id = ?
             `, [targetGroupId]);
 
@@ -95,7 +95,7 @@ async function handler(client, message, config) {
                 SUM(CASE WHEN extended_history_used THEN 1 ELSE 0 END) as extended_history_count,
                 SUM(cached_tokens) as total_cached_tokens,
                 SUM(cost_usd) as total_cost
-            FROM claude_api_calls
+            FROM llm_api_calls
             WHERE group_id = ?
         `;
         const queryParams = [targetGroupId];

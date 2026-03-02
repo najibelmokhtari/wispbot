@@ -1,4 +1,4 @@
-const { getDatabase } = require('./db');
+const { getDatabase, getBotSetting, setBotSetting } = require('./db');
 const logger = require('./logger');
 
 class TokenUsageTracker {
@@ -14,7 +14,7 @@ class TokenUsageTracker {
             const db = await getDatabase();
             // Create the table if it doesn't exist
             await db.exec(`
-                CREATE TABLE IF NOT EXISTS claude_api_calls (
+                CREATE TABLE IF NOT EXISTS llm_api_calls (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     user_id TEXT NOT NULL,
                     group_id TEXT NOT NULL,
@@ -30,13 +30,14 @@ class TokenUsageTracker {
             const columnsToAdd = [
                 { name: 'cached_tokens', type: 'INTEGER DEFAULT 0' },
                 { name: 'cost_usd', type: 'REAL DEFAULT 0.0' },
-                { name: 'provider', type: "TEXT DEFAULT 'unknown'" }
+                { name: 'provider', type: "TEXT DEFAULT 'unknown'" },
+                { name: 'tts_cost_usd', type: 'REAL DEFAULT 0.0' }
             ];
 
             for (const col of columnsToAdd) {
                 try {
-                    await db.exec(`ALTER TABLE claude_api_calls ADD COLUMN ${col.name} ${col.type}`);
-                    // console.log(`Added column ${col.name} to claude_api_calls`);
+                    await db.exec(`ALTER TABLE llm_api_calls ADD COLUMN ${col.name} ${col.type}`);
+                    // console.log(`Added column ${col.name} to llm_api_calls`);
                 } catch (error) {
                     // Ignore error if column likely exists (SQLite doesn't support IF NOT EXISTS for ADD COLUMN)
                 }
@@ -49,7 +50,7 @@ class TokenUsageTracker {
         }
     }
 
-    async recordUsage(userId, groupId, inputTokens, outputTokens, extendedHistoryUsed, aiModel, cachedTokens = 0, costUsd = 0, provider = 'unknown', retries = 3) {
+    async recordUsage(userId, groupId, inputTokens, outputTokens, extendedHistoryUsed, aiModel, cachedTokens = 0, costUsd = 0, provider = 'unknown', ttsCostUsd = 0, retries = 3) {
         try {
             this.pendingWrites.push({
                 userId,
@@ -60,7 +61,8 @@ class TokenUsageTracker {
                 aiModel,
                 cachedTokens,
                 costUsd,
-                provider
+                provider,
+                ttsCostUsd
             });
 
             if (this.pendingWrites.length >= 10 || Date.now() - this.lastCommitTime >= this.commitInterval) {
@@ -70,7 +72,7 @@ class TokenUsageTracker {
             if (error.code === 'SQLITE_BUSY' && retries > 0) {
                 logger.debug('TokenTracker', `Database busy, retrying... (${retries} attempts left)`);
                 await new Promise(resolve => setTimeout(resolve, 100)); // Wait 100ms before retrying
-                return this.recordUsage(userId, groupId, inputTokens, outputTokens, extendedHistoryUsed, aiModel, cachedTokens, costUsd, provider, retries - 1);
+                return this.recordUsage(userId, groupId, inputTokens, outputTokens, extendedHistoryUsed, aiModel, cachedTokens, costUsd, provider, ttsCostUsd, retries - 1);
             }
             logger.error('TokenTracker', 'Error recording API call: ' + error.message);
             throw error;
@@ -88,7 +90,7 @@ class TokenUsageTracker {
                     SUM(cached_tokens) as total_cached_tokens,
                     SUM(cost_usd) as total_cost_usd,
                     SUM(CASE WHEN extended_history_used THEN 1 ELSE 0 END) as extended_history_count
-                FROM claude_api_calls
+                FROM llm_api_calls
                 WHERE user_id = ? AND timestamp BETWEEN ? AND ?
             `, [userId, startDate, endDate]);
             return result[0];
@@ -109,7 +111,7 @@ class TokenUsageTracker {
                     SUM(output_tokens) as total_output_tokens,
                     SUM(cached_tokens) as total_cached_tokens,
                     SUM(cost_usd) as total_cost_usd
-                FROM claude_api_calls
+                FROM llm_api_calls
                 WHERE group_id = ? AND timestamp BETWEEN ? AND ?
                 GROUP BY user_id
             `, [groupId, startDate, endDate]);
@@ -131,9 +133,9 @@ class TokenUsageTracker {
 
             for (const write of this.pendingWrites) {
                 await db.run(`
-                    INSERT INTO claude_api_calls
-                    (user_id, group_id, input_tokens, output_tokens, extended_history_used, ai_model, cached_tokens, cost_usd, provider)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    INSERT INTO llm_api_calls
+                    (user_id, group_id, input_tokens, output_tokens, extended_history_used, ai_model, cached_tokens, cost_usd, provider, tts_cost_usd)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 `, [
                     write.userId,
                     write.groupId,
@@ -143,19 +145,87 @@ class TokenUsageTracker {
                     write.aiModel,
                     write.cachedTokens || 0,
                     write.costUsd || 0,
-                    write.provider || 'unknown'
+                    write.provider || 'unknown',
+                    write.ttsCostUsd || 0
                 ]);
             }
 
             await db.run('COMMIT');
-            this.lastCommitTime = Date.now();
+            // Clear pending writes immediately after confirmed commit
+            // so they aren't lost if _checkUsageLimit throws
             this.pendingWrites = [];
+            this.lastCommitTime = Date.now();
             logger.info('TokenTracker', 'Forced commit completed');
+
+            // Check usage hard limit
+            await this._checkUsageLimit(db);
         } catch (error) {
             logger.error('TokenTracker', 'Error forcing commit: ' + error.message);
-            const db = await getDatabase();
-            await db.run('ROLLBACK');
+            try {
+                const db = await getDatabase();
+                await db.run('ROLLBACK');
+            } catch (rollbackError) {
+                logger.error('TokenTracker', 'Rollback also failed: ' + rollbackError.message);
+            }
             throw error;
+        }
+    }
+    async _checkUsageLimit(db) {
+        try {
+            const limitStr = await getBotSetting('usage_hard_limit');
+            if (!limitStr) return; // No limit configured
+
+            const limit = parseFloat(limitStr);
+            if (isNaN(limit) || limit <= 0) return;
+
+            const mode = await getBotSetting('usage_cap_mode') || 'manual';
+            const botActive = await getBotSetting('bot_active');
+
+            let resetDate;
+            if (mode === 'monthly') {
+                // Use 1st of current UTC month
+                const now = new Date();
+                resetDate = now.getUTCFullYear() + '-' +
+                    String(now.getUTCMonth() + 1).padStart(2, '0') +
+                    '-01 00:00:00';
+
+                // In monthly mode, auto re-enable bot if a new month has started
+                if (botActive === '0') {
+                    const disabledResetDate = await getBotSetting('usage_limit_reset_date') || '';
+                    // If the stored reset date is from a previous month, re-enable
+                    if (disabledResetDate && disabledResetDate < resetDate) {
+                        await setBotSetting('bot_active', '1');
+                        logger.info('TokenTracker', `New month started — bot auto re-enabled (monthly cap mode)`);
+                        // Continue to check if we're already over limit this month
+                    } else if (!disabledResetDate) {
+                        // No stored date, new month logic: re-enable and check
+                        await setBotSetting('bot_active', '1');
+                    } else {
+                        return; // Same month, still disabled
+                    }
+                }
+            } else {
+                // Manual mode
+                if (botActive === '0') return; // Already disabled
+                resetDate = await getBotSetting('usage_limit_reset_date') || '2000-01-01 00:00:00';
+            }
+
+            const totals = await db.get(`
+                SELECT COALESCE(SUM(cost_usd), 0) as cost_usd
+                FROM llm_api_calls
+                WHERE timestamp >= ?
+            `, [resetDate]);
+
+            if (totals.cost_usd >= limit) {
+                await setBotSetting('bot_active', '0');
+                // Store when we disabled so monthly mode can detect new month
+                if (mode === 'monthly') {
+                    await setBotSetting('usage_limit_reset_date', resetDate);
+                }
+                logger.warn('TokenTracker', `Usage limit exceeded ($${totals.cost_usd.toFixed(4)} >= $${limit.toFixed(2)}) — bot has been disabled`);
+            }
+        } catch (error) {
+            logger.error('TokenTracker', 'Error checking usage limit: ' + error.message);
         }
     }
 }

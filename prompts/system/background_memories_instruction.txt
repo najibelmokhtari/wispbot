@@ -47,3 +47,13 @@ Use the following sections. Keep each section concise — this is a reference do
 7. **Language awareness**: The group may use multiple languages (Arabic, French, English, Darija, etc.). Write memories in the language that best captures the meaning, defaulting to English for the document structure.
 8. **Date context**: When something time-sensitive is mentioned, note the approximate date.
 9. **Return ONLY the complete updated markdown document** — no explanations, no meta-commentary, no wrapping in code blocks.
+
+## Compaction & Maintenance
+
+Every time you update the document, also review it for compaction:
+
+- **Consolidate similar entries**: If multiple bullets in the same section convey overlapping information, merge them into one.
+- **Promote recurring themes**: If a topic from "Recent Highlights" keeps coming back over multiple updates, graduate it to the appropriate permanent section (Topics & Interests, Notable Facts, etc.) and remove it from Recent Highlights.
+- **Age out stale entries**: Remove items from "Recent Highlights" that are older than ~2 weeks. For other sections, remove entries that haven't been relevant or referenced in a long time and are unlikely to matter again.
+- **Summarize rather than accumulate**: If a section is growing long, summarize clusters of related bullets into fewer, more general entries. For example, five separate "X went to Y place" bullets can become one "X travels frequently" bullet.
+- **Hard limit**: If the document exceeds ~200 lines after your update, you MUST compact it back down by merging, summarizing, or dropping the least useful entries.

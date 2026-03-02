@@ -9,7 +9,6 @@ const { addPhoneToUsernameMapping } = require('../../phone-number-replacer');
 
 const PERSONAS_DIR = path.join(__dirname, '..', '..', '..', 'prompts', 'personas');
 const SYSTEM_PROMPTS_DIR = path.join(__dirname, '..', '..', '..', 'prompts', 'system');
-const TTS_VOICES = require('../../../data/gemini-tts-voices.json');
 
 // Editable system prompt blocks
 const SYSTEM_PROMPTS = [
@@ -17,7 +16,8 @@ const SYSTEM_PROMPTS = [
     { file: 'user_prefix_prompt.txt', name: 'user_prefix_prompt', displayName: 'User Prefix Prompt', description: 'Prefixed to the user message in API calls.' },
     { file: 'mention_instruction.txt', name: 'mention_instruction', displayName: 'Mention Instruction', description: 'Injected when the group has @-taggable users.' },
     { file: 'tts_system_instruction.txt', name: 'tts_system_instruction', displayName: 'TTS System Instruction', description: 'Format instructions for audio output mode.' },
-    { file: 'background_memories_instruction.txt', name: 'background_memories_instruction', displayName: 'Background: Memory Extraction', description: 'System prompt for the background LLM that maintains group memories.' },
+    { file: 'background_memories_instruction.txt', name: 'background_memories_instruction', displayName: 'Memories: Extraction Prompt', description: 'System prompt for the background LLM that maintains group memories.' },
+    { file: 'active_listening_instruction.txt', name: 'active_listening_instruction', displayName: 'Active Listening: Decision Prompt', description: 'System prompt for the fast LLM that decides whether the bot should respond.' },
 ];
 
 const SYSTEM_PROMPT_NAMES = new Set(SYSTEM_PROMPTS.map(p => p.name));
@@ -37,7 +37,7 @@ router.get('/settings', async (req, res) => {
     try {
         const settings = await getAllBotSettings();
         const personas = await getPersonaNames();
-        res.render('settings', { settings, personas, models: AVAILABLE_MODELS, systemPrompts: SYSTEM_PROMPTS, ttsVoices: TTS_VOICES });
+        res.render('settings', { settings, personas, models: AVAILABLE_MODELS, systemPrompts: SYSTEM_PROMPTS });
     } catch (error) {
         logger.error('Admin', 'Error loading settings page: ' + error.message);
         res.status(500).send('Failed to load settings');
@@ -58,13 +58,19 @@ router.get('/api/settings', async (req, res) => {
 router.post('/api/settings', async (req, res) => {
     try {
         const allowed = [
-            'bot_name', 'tts_trigger', 'default_persona', 'default_ai_model',
-            'default_google_search', 'default_audio', 'default_tts', 'default_auth_check',
+            'bot_name', 'bot_active', 'tts_trigger', 'default_persona', 'default_ai_model',
+            'default_google_search', 'default_audio', 'default_image', 'default_tts', 'default_auth_check',
             'default_background_processing', 'default_background_debounce_ms', 'default_background_message_threshold',
             'background_processing_global', 'background_ai_model',
             'default_message_history_limit',
             'default_audio_history_mode', 'default_audio_history_count', 'default_audio_duration_cap',
-            'default_tts_trigger_mode'
+            'default_image_history_mode', 'default_image_history_count',
+            'default_tts_trigger_mode',
+            'active_listening_ai_model',
+            'default_active_listening', 'default_active_listening_throttle_ms', 'default_active_listening_context_count',
+            'default_al_send_audio', 'default_al_send_images', 'default_al_audio_count', 'default_al_image_count',
+            'offline_message_mode', 'bot_activation_mode',
+            'usage_hard_limit', 'usage_limit_reset_date', 'usage_cap_mode'
         ];
         for (const [key, value] of Object.entries(req.body)) {
             if (allowed.includes(key)) {

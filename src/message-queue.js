@@ -1,4 +1,3 @@
-const { callClaudeAPI } = require('./ai/claude');
 const { callGeminiAPI } = require('./ai/gemini');
 const { removeExtendedHistoryCode } = require('./message-processor');
 const TokenUsageTracker = require('./token-usage-tracker');
@@ -6,16 +5,26 @@ const conversationStore = require('./conversation-store');
 const { getDatabase, getOrCreateGroupInfo, updateGroupInfo, getUserAlias, getBotSetting } = require('./db');
 const fs = require('fs').promises;
 const path = require('path');
-const { MessageMedia } = require('whatsapp-web.js');
+const { dbIdToJid } = require('./whatsapp-utils');
 const TTSService = require('./services/tts');
 const logger = require('./logger');
 const { parsePersonaFile } = require('./persona-parser');
 
+/**
+ * Provider registry — add new LLM providers here.
+ * Each provider function must match the signature:
+ *   (context, config, systemPrompt) => Promise<{ response: string, tokens: { prompt_tokens, completion_tokens, cached_tokens?, cost_usd?, provider? } }>
+ */
+const AI_PROVIDERS = {
+    gemini: callGeminiAPI,
+};
+
 function getAiApi(provider) {
-    if (provider === 'gemini') {
-        return callGeminiAPI;
+    const fn = AI_PROVIDERS[provider];
+    if (!fn) {
+        throw new Error(`AI provider "${provider}" is not implemented. Available providers: ${Object.keys(AI_PROVIDERS).join(', ')}`);
     }
-    return callClaudeAPI;
+    return fn;
 }
 
 // Helper function to introduce a delay
@@ -116,7 +125,7 @@ class MessageQueueManager {
         this.tokenUsageTracker = new TokenUsageTracker(config);
         this.promptManager = new PromptManager();
         this.defaultPromptName = 'default';
-        this.ttsService = new TTSService(config); // Initialize TTS Service
+        this.ttsService = new TTSService();
     }
 
     async initialize() {
@@ -265,6 +274,7 @@ class MessageQueueManager {
             const groupId = message.from;
             const senderId = message.author || message.from; // Safe sender ID retrieval
 
+            let aiModel = this.config.aiModel; // default; updated below with group-specific model
             try {
                 let chatHistory = await conversationStore.loadConversation(groupId, historyLimit);
 
@@ -293,9 +303,12 @@ class MessageQueueManager {
                 // --- TTS INTENT DETECTION ---
                 const ttsTrigger = (await getBotSetting('tts_trigger')) || this.config.ttsTrigger;
                 const ttsEnabled = groupInfo.tts_enabled === 1;
-                const ttsTriggerMode = groupInfo.tts_trigger_mode || (await getBotSetting('default_tts_trigger_mode')) || 'keyword';
+                const ttsTriggerMode = groupInfo.tts_trigger_mode || (await getBotSetting('default_tts_trigger_mode')) || 'tag';
                 let requestsTTS = false;
-                if (ttsEnabled) {
+                if (message.skipTTS) {
+                    // Active listener explicitly decided no TTS for this message
+                    requestsTTS = false;
+                } else if (ttsEnabled) {
                     if (ttsTriggerMode === 'always') {
                         requestsTTS = true;
                     } else {
@@ -304,7 +317,7 @@ class MessageQueueManager {
                 }
 
                 // Strip the TTS trigger from the message so the LLM doesn't see it
-                if (requestsTTS && ttsTriggerMode === 'keyword') {
+                if (requestsTTS && ttsTriggerMode === 'tag') {
                     message.body = message.body.replace(ttsTrigger, '').trim();
                 }
 
@@ -345,7 +358,7 @@ class MessageQueueManager {
                 }
 
                 // Get the AI model for this group, fallback to global config
-                const aiModel = groupInfo.ai_model || this.config.aiModel;
+                aiModel = groupInfo.ai_model || this.config.aiModel;
                 logger.info('AI', `Using model '${aiModel}' for group ${groupId}`);
 
                 // Create a modified config with the group-specific model
@@ -355,24 +368,10 @@ class MessageQueueManager {
 
                 // Send typing indicator before calling the LLM
                 try {
-                    const chat = await message.getChat();
-                    if (!chat.isGroup) {
-                        // DM chats: sendStateTyping() often fails silently on newer WhatsApp Web
-                        // because WidFactory.createWid doesn't handle LID-format IDs properly.
-                        // Bypass whatsapp-web.js and use the Store chat model directly.
-                        await client.pupPage.evaluate(async (chatId) => {
-                            try {
-                                await window.Store.PresenceUtils.sendPresenceAvailable();
-                                const chatModel = window.Store.Chat.get(chatId);
-                                if (chatModel) {
-                                    await window.Store.ChatState.sendChatStateComposing(chatModel.id);
-                                }
-                            } catch (e) {
-                                console.warn('[wispbot] DM typing state failed:', e.message);
-                            }
-                        }, groupId);
-                    } else {
-                        await chat.sendStateTyping();
+                    const sockRef = client._sock;
+                    if (sockRef) {
+                        const jid = dbIdToJid(groupId);
+                        await sockRef.sendPresenceUpdate('composing', jid);
                     }
                 } catch (e) {
                     logger.warn('Queue', `Failed to send typing state: ${e.message}`);
@@ -440,8 +439,14 @@ class MessageQueueManager {
                         // 2. Generate Audio
                         // Resolve voice from persona > default persona > hardcoded fallback
                         const ttsVoice = this.promptManager.getTtsVoice(promptName) || 'Kore';
-                        // Use the parsed response content for TTS
-                        const ttsResult = await this.ttsService.generateAudio(responseContent, { stylePrompt, voice: ttsVoice });
+                        // Use the parsed response content for TTS (retry once on failure)
+                        let ttsResult;
+                        try {
+                            ttsResult = await this.ttsService.generateAudio(responseContent, { stylePrompt, voice: ttsVoice });
+                        } catch (firstAttemptError) {
+                            logger.warn('TTS', `First attempt failed: ${firstAttemptError.message}. Retrying...`);
+                            ttsResult = await this.ttsService.generateAudio(responseContent, { stylePrompt, voice: ttsVoice });
+                        }
 
                         ttsCost = ttsResult.costUsd;
                         logger.info('TTS', `Generated. Cost: $${ttsCost}`);
@@ -456,13 +461,15 @@ class MessageQueueManager {
                         await fs.writeFile(audioFilePath, Buffer.from(ttsResult.audioBase64, 'base64'));
                         logger.debug('TTS', `Saved audio to ${audioFilePath}`);
 
-                        const media = MessageMedia.fromFilePath(audioFilePath);
-                        media.filename = audioFilename; // Explicitly set filename
-
                         try {
                             logger.debug('TTS', 'Attempting to send as Voice Note...');
-                            await client.sendMessage(message.from, media, {
-                                sendAudioAsVoice: true
+                            const audioBuffer = await fs.readFile(audioFilePath);
+                            const sockRef = client._sock;
+                            const jid = dbIdToJid(message.from);
+                            await sockRef.sendMessage(jid, {
+                                audio: audioBuffer,
+                                mimetype: 'audio/ogg; codecs=opus',
+                                ptt: true
                             });
                             logger.info('TTS', `Voice Note sent to ${groupId}`);
                         } catch (voiceError) {
@@ -471,13 +478,18 @@ class MessageQueueManager {
                             // Fallback: Send as Document
                             logger.info('TTS', 'Attempting to send as audio file (document)...');
                             try {
-                                await client.sendMessage(message.from, media, {
-                                    sendAudioAsVoice: false
+                                const audioBuffer = await fs.readFile(audioFilePath);
+                                const sockRef = client._sock;
+                                const jid = dbIdToJid(message.from);
+                                await sockRef.sendMessage(jid, {
+                                    audio: audioBuffer,
+                                    mimetype: 'audio/ogg; codecs=opus',
+                                    ptt: false
                                 });
                                 logger.info('TTS', `Sent as document to ${groupId}`);
                             } catch (docError) {
                                 logger.error('TTS', `Sending as document failed: ${docError.message}`);
-                                throw docError; // Re-throw to trigger outer catch
+                                throw docError;
                             }
                         }
 
@@ -498,7 +510,7 @@ class MessageQueueManager {
                 // --- USAGE TRACKING ---
                 if (tokens !== undefined) {
                     const extendedHistoryUsed = historyLimit > this.config.messageHistoryLimit;
-                    // Combine LLM Cost + TTS Cost
+                    // Track LLM cost and TTS cost separately
                     const totalCost = (tokens.cost_usd || 0) + ttsCost;
 
                     await this.tokenUsageTracker.recordUsage(
@@ -510,7 +522,8 @@ class MessageQueueManager {
                         aiModel,
                         tokens.cached_tokens || 0,
                         totalCost,
-                        tokens.provider || this.config.aiProvider || 'unknown'
+                        tokens.provider || this.config.aiProvider || 'unknown',
+                        ttsCost
                     );
                 } else {
                     logger.warn('Queue', `Token usage undefined for user ${senderId} in ${groupId}`);
@@ -532,7 +545,12 @@ class MessageQueueManager {
             } catch (error) {
                 logger.error('Queue', `Error processing message in ${groupId} from ${senderId}: ${error.message}`);
                 try {
-                    await client.sendMessage(message.from, 'Sorry, I encountered an error while processing your request.');
+                    const errorMsg = error.message || '';
+                    const isQuotaError = errorMsg.includes('quota') || errorMsg.includes('Quota') || errorMsg.includes('RESOURCE_EXHAUSTED') || errorMsg.includes('rate limit') || errorMsg.includes('429');
+                    const userMessage = isQuotaError
+                        ? `Oops! It looks like I've hit my API usage limit for now. This usually means the current plan's quota has been exceeded for the AI model configured in this group (${aiModel}). Please try again later or ask the admin to check the API plan/billing/model.`
+                        : 'Sorry, I encountered an error while processing your request.';
+                    await client.sendMessage(message.from, userMessage);
                 } catch (sendError) {
                     logger.error('Queue', `Failed to send error message to ${groupId}: ${sendError.message}`);
                 }
@@ -666,8 +684,11 @@ class MessageQueueManager {
             quotedImageId: quotedImageId,
             quotedAudioId: quotedAudioId,
             audioEnabled: groupInfo.audio_enabled === 1,
+            imageEnabled: groupInfo.image_enabled === 1,
             audioHistoryMode: groupInfo.audio_history_mode || 'tagged',
             audioHistoryCount: groupInfo.audio_history_count || 1,
+            imageHistoryMode: groupInfo.image_history_mode || 'tagged',
+            imageHistoryCount: groupInfo.image_history_count || 1,
             // Capture current message media
             currentImageId: message.imageId || null,
             currentAudioId: message.audioId || null

@@ -1,133 +1,226 @@
 <%- include('layout') %>
 
-<h2>Chats</h2>
+    <h2>Chats</h2>
 
-<h3 class="section-heading">Groups</h3>
+    <h3 class="section-heading">Groups</h3>
 
-<% if (groups.length === 0 && unconfiguredGroups.length === 0) { %>
-    <p>No groups found. Groups appear here once the bot receives messages in them.</p>
-<% } else { %>
-<figure>
-<table>
-    <thead>
-        <tr>
-            <th>Group Name</th>
-            <th>Persona</th>
-            <th>Model</th>
-            <th class="toggle-cell">Search</th>
-            <th class="toggle-cell">Audio</th>
-            <th class="toggle-cell">TTS</th>
-            <th class="toggle-cell">Auth Check</th>
-            <th class="toggle-cell">BG</th>
-            <th class="toggle-cell">Actions</th>
-        </tr>
-    </thead>
-    <tbody>
-        <% for (const g of groups) { %>
-        <tr class="group-row" data-href="<%= basePath %>/groups/<%= encodeURIComponent(g.group_id) %>">
-            <td>
-                <strong><%= g.group_name || g.group_id %></strong><br>
-                <small style="color:#999"><%= g.group_id %></small>
-            </td>
-            <td><%= g.default_prompt_name || 'default' %></td>
-            <td><small><%= g.ai_model || 'gemini-2.5-pro' %></small></td>
-            <td class="toggle-cell"><span class="<%= g.google_search_enabled ? 'badge-on' : 'badge-off' %>"><%= g.google_search_enabled ? 'ON' : 'OFF' %></span></td>
-            <td class="toggle-cell"><span class="<%= g.audio_enabled ? 'badge-on' : 'badge-off' %>"><%= g.audio_enabled ? 'ON' : 'OFF' %></span></td>
-            <td class="toggle-cell"><span class="<%= g.tts_enabled ? 'badge-on' : 'badge-off' %>"><%= g.tts_enabled ? 'ON' : 'OFF' %></span></td>
-            <td class="toggle-cell"><span class="<%= g.authorization_check_enabled ? 'badge-on' : 'badge-off' %>"><%= g.authorization_check_enabled ? 'ON' : 'OFF' %></span></td>
-            <td class="toggle-cell"><span class="<%= g.background_processing_enabled !== 0 ? 'badge-on' : 'badge-off' %>"><%= g.background_processing_enabled !== 0 ? 'ON' : 'OFF' %></span></td>
-            <td class="toggle-cell actions-cell">
-                <% if (g.group_id.endsWith('@g.us')) { %>
-                <button class="outline action-btn" data-action="inspect" data-group-id="<%= g.group_id %>" title="Inspect">👁</button>
-                <% } %>
-                <button class="outline secondary action-btn" data-action="deactivate" data-group-id="<%= g.group_id %>" title="Deactivate">⏸</button>
-            </td>
-        </tr>
-        <% if (g.group_id.endsWith('@g.us')) { %>
-        <tr class="inspect-row" id="inspect-row-<%= g.group_id %>" style="display:none">
-            <td colspan="9" class="inspect-panel">
-                <p aria-busy="true">Loading WhatsApp info…</p>
-            </td>
-        </tr>
-        <% } %>
-        <% } %>
-        <% for (const g of unconfiguredGroups) { %>
-        <tr class="group-row inactive">
-            <td>
-                <strong><%= g.group_name !== g.group_id ? g.group_name : 'Unknown Group' %></strong><br>
-                <small style="color:#999"><%= g.group_id %></small>
-            </td>
-            <td colspan="7" style="color:#999">Not activated</td>
-            <td class="toggle-cell actions-cell">
-                <button class="outline action-btn" data-action="inspect" data-group-id="<%= g.group_id %>" title="Inspect">👁</button>
-                <button class="action-btn" data-action="activate" data-group-id="<%= g.group_id %>" title="Activate">Activate</button>
-            </td>
-        </tr>
-        <tr class="inspect-row" id="inspect-row-<%= g.group_id %>" style="display:none">
-            <td colspan="9" class="inspect-panel">
-                <p aria-busy="true">Loading WhatsApp info…</p>
-            </td>
-        </tr>
-        <% } %>
-    </tbody>
-</table>
-</figure>
-<% } %>
+    <% if (groups.length===0 && unconfiguredGroups.length===0) { %>
+        <p>No groups found. Groups appear here once the bot receives messages in them.</p>
+        <% } else { %>
+            <div class="features-legend">
+                <span title="Web Search: Bot can search the web for up-to-date information">🔍 Web Search</span>
+                <span title="Audio: Can listen to voice memos">👂 Audio</span>
+                <span title="Image: Can process image attachments">🖼️ Image</span>
+                <span title="TTS: Bot can respond with voice memos">🗣️ TTS</span>
+                <span title="Auth: Only authorized users can invoke the bot">🔒 Auth</span>
+                <span
+                    title="Memories: Builds and maintains conversation memories<%= !backgroundGlobalEnabled ? ' (globally disabled)' : '' %>"
+                    <%=!backgroundGlobalEnabled ? ' class="global-off-legend"' : '' %>>🧠 Memories</span>
+                <span
+                    title="Active Listening: Bot decides when to respond without being tagged">👀 Active
+                    Listening</span>
+            </div>
+            <figure>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Group Name</th>
+                            <th>Persona</th>
+                            <th>Model</th>
+                            <th class="toggle-cell">Flags</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <% for (const g of groups) { %>
+                            <tr class="group-row"
+                                data-href="<%= basePath %>/groups/<%= encodeURIComponent(g.group_id) %>">
+                                <td>
+                                    <strong>
+                                        <%= g.group_name || g.group_id %>
+                                    </strong><br>
+                                    <small style="color:#999">
+                                        <%= g.group_id %>
+                                    </small>
+                                </td>
+                                <td>
+                                    <%= g.default_prompt_name || 'default' %>
+                                </td>
+                                <td><small>
+                                        <%= g.ai_model || 'gemini-3.1-pro-preview' %>
+                                    </small></td>
+                                <td class="flags-cell"><span
+                                        class="feature-icon<%= g.google_search_enabled ? '' : ' off' %>"
+                                        title="Web Search: Bot can search the web for up-to-date information">🔍</span><span
+                                        class="feature-icon<%= g.audio_enabled ? '' : ' off' %>"
+                                        title="Audio: Can listen to voice memos">👂</span><span
+                                        class="feature-icon<%= g.image_enabled ? '' : ' off' %>"
+                                        title="Image: Can process image attachments">🖼️</span><span
+                                        class="feature-icon<%= g.tts_enabled ? '' : ' off' %>"
+                                        title="TTS: Bot can respond with voice memos">🗣️</span><span
+                                        class="feature-icon<%= g.authorization_check_enabled ? '' : ' off' %>"
+                                        title="Auth: Only authorized users can invoke the bot">🔒</span><span
+                                        class="feature-icon<%= !backgroundGlobalEnabled ? ' global-off' : (g.background_processing_enabled !== 0 ? '' : ' off') %>"
+                                        title="Memories: Builds and maintains conversation memories<%= !backgroundGlobalEnabled ? ' (globally disabled)' : '' %>">🧠</span><span
+                                        class="feature-icon<%= g.active_listening_enabled !== 0 ? '' : ' off' %>"
+                                        title="Active Listening: Bot decides when to respond without being tagged">👀</span>
+                                </td>
+                                <td class="actions-cell">
+                                    <button class="outline action-btn labeled-action"
+                                        onclick="event.stopPropagation(); window.open('<%= basePath %>/groups/<%= encodeURIComponent(g.group_id) %>/chat', '_blank')"
+                                        title="View Chat">💬 <span class="action-label">Chat</span></button>
+                                    <% if (g.group_id.endsWith('@g.us')) { %>
+                                        <button class="outline action-btn labeled-action" data-action="inspect"
+                                            data-group-id="<%= g.group_id %>"
+                                            data-auth-enabled="<%= g.authorization_check_enabled ? '1' : '0' %>"
+                                            title="<%= g.authorization_check_enabled ? 'Group Auth' : 'Group Details' %>">👥
+                                            <span class="action-label">
+                                                <%= g.authorization_check_enabled ? 'Auth' : 'Details' %>
+                                            </span></button>
+                                        <% } %>
+                                            <button class="outline secondary action-btn labeled-action"
+                                                data-action="deactivate" data-group-id="<%= g.group_id %>"
+                                                title="Deactivate">⏸ <span class="action-label">Pause</span></button>
+                                </td>
+                            </tr>
+                            <% if (g.group_id.endsWith('@g.us')) { %>
+                                <tr class="inspect-row" id="inspect-row-<%= g.group_id %>" style="display:none">
+                                    <td colspan="5" class="inspect-panel">
+                                        <p aria-busy="true">Loading WhatsApp info…</p>
+                                    </td>
+                                </tr>
+                                <% } %>
+                                    <% } %>
+                                        <% for (const g of unconfiguredGroups) { %>
+                                            <tr class="group-row inactive">
+                                                <td>
+                                                    <strong>
+                                                        <%= g.group_name !==g.group_id ? g.group_name : 'Unknown Group'
+                                                            %>
+                                                    </strong><br>
+                                                    <small style="color:#999">
+                                                        <%= g.group_id %>
+                                                    </small>
+                                                </td>
+                                                <td colspan="3" style="color:#999">Not activated</td>
+                                                <td class="actions-cell">
+                                                    <button class="outline action-btn labeled-action"
+                                                        data-action="inspect" data-group-id="<%= g.group_id %>"
+                                                        title="Group Details">👥 <span
+                                                            class="action-label">Details</span></button>
+                                                    <button class="action-btn labeled-action" data-action="activate"
+                                                        data-group-id="<%= g.group_id %>" title="Activate">▶ <span
+                                                            class="action-label">Activate</span></button>
+                                                </td>
+                                            </tr>
+                                            <tr class="inspect-row" id="inspect-row-<%= g.group_id %>"
+                                                style="display:none">
+                                                <td colspan="5" class="inspect-panel">
+                                                    <p aria-busy="true">Loading WhatsApp info…</p>
+                                                </td>
+                                            </tr>
+                                            <% } %>
+                    </tbody>
+                </table>
+            </figure>
+            <% } %>
 
-<h3 class="section-heading">Direct Messages</h3>
+                <h3 class="section-heading">Direct Messages</h3>
 
-<% if (dms.length === 0 && unconfiguredDms.length === 0) { %>
-    <p>No direct messages found. DMs appear here once the bot receives direct messages.</p>
-<% } else { %>
-<figure>
-<table>
-    <thead>
-        <tr>
-            <th>Contact</th>
-            <th>Persona</th>
-            <th>Model</th>
-            <th class="toggle-cell">Search</th>
-            <th class="toggle-cell">Audio</th>
-            <th class="toggle-cell">TTS</th>
-            <th class="toggle-cell">Auth Check</th>
-            <th class="toggle-cell">BG</th>
-            <th class="toggle-cell">Actions</th>
-        </tr>
-    </thead>
-    <tbody>
-        <% for (const d of dms) { %>
-        <tr class="group-row" data-href="<%= basePath %>/groups/<%= encodeURIComponent(d.group_id) %>">
-            <td>
-                <strong><%= d.resolved_name || d.group_name || d.group_id %></strong><br>
-                <small style="color:#999"><%= d.group_id %></small>
-            </td>
-            <td><%= d.default_prompt_name || 'default' %></td>
-            <td><small><%= d.ai_model || 'gemini-2.5-pro' %></small></td>
-            <td class="toggle-cell"><span class="<%= d.google_search_enabled ? 'badge-on' : 'badge-off' %>"><%= d.google_search_enabled ? 'ON' : 'OFF' %></span></td>
-            <td class="toggle-cell"><span class="<%= d.audio_enabled ? 'badge-on' : 'badge-off' %>"><%= d.audio_enabled ? 'ON' : 'OFF' %></span></td>
-            <td class="toggle-cell"><span class="<%= d.tts_enabled ? 'badge-on' : 'badge-off' %>"><%= d.tts_enabled ? 'ON' : 'OFF' %></span></td>
-            <td class="toggle-cell"><span class="<%= d.authorization_check_enabled ? 'badge-on' : 'badge-off' %>"><%= d.authorization_check_enabled ? 'ON' : 'OFF' %></span></td>
-            <td class="toggle-cell"><span class="<%= d.background_processing_enabled !== 0 ? 'badge-on' : 'badge-off' %>"><%= d.background_processing_enabled !== 0 ? 'ON' : 'OFF' %></span></td>
-            <td class="toggle-cell actions-cell">
-                <button class="outline secondary action-btn" data-action="deactivate" data-group-id="<%= d.group_id %>" title="Deactivate">⏸</button>
-            </td>
-        </tr>
-        <% } %>
-        <% for (const d of unconfiguredDms) { %>
-        <tr class="group-row inactive">
-            <td>
-                <strong><%= d.resolved_name || d.group_name || d.group_id %></strong><br>
-                <small style="color:#999"><%= d.group_id %></small>
-            </td>
-            <td colspan="7" style="color:#999">Not activated</td>
-            <td class="toggle-cell actions-cell">
-                <button class="action-btn" data-action="activate" data-group-id="<%= d.group_id %>" title="Activate">Activate</button>
-            </td>
-        </tr>
-        <% } %>
-    </tbody>
-</table>
-</figure>
-<% } %>
+                <% if (dms.length===0 && unconfiguredDms.length===0) { %>
+                    <p>No direct messages found. DMs appear here once the bot receives direct messages.</p>
+                    <% } else { %>
+                        <div class="features-legend">
+                            <span title="Web Search: Bot can search the web for up-to-date information">🔍 Web
+                                Search</span>
+                            <span title="Audio: Can listen to voice memos">👂 Audio</span>
+                            <span title="Image: Can process image attachments">🖼️ Image</span>
+                            <span title="TTS: Bot can respond with voice memos">🗣️ TTS</span>
+                            <span title="Auth: Only authorized users can invoke the bot">🔒 Auth</span>
+                            <span
+                                title="Memories: Builds and maintains conversation memories<%= !backgroundGlobalEnabled ? ' (globally disabled)' : '' %>"
+                                <%=!backgroundGlobalEnabled ? ' class="global-off-legend"' : '' %>>🧠 Memories</span>
+                            <span
+                                title="Active Listening: Bot decides when to respond without being tagged">👀
+                                Active Listening</span>
+                        </div>
+                        <figure>
+                            <table>
+                                <thead>
+                                    <tr>
+                                        <th>Contact</th>
+                                        <th>Persona</th>
+                                        <th>Model</th>
+                                        <th class="toggle-cell">Flags</th>
+                                        <th>Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <% for (const d of dms) { %>
+                                        <tr class="group-row"
+                                            data-href="<%= basePath %>/groups/<%= encodeURIComponent(d.group_id) %>">
+                                            <td>
+                                                <strong>
+                                                    <%= d.resolved_name || d.group_name || d.group_id %>
+                                                </strong><br>
+                                                <small style="color:#999">
+                                                    <%= d.group_id %>
+                                                </small>
+                                            </td>
+                                            <td>
+                                                <%= d.default_prompt_name || 'default' %>
+                                            </td>
+                                            <td><small>
+                                                    <%= d.ai_model || 'gemini-3.1-pro-preview' %>
+                                                </small></td>
+                                            <td class="flags-cell"><span
+                                                    class="feature-icon<%= d.google_search_enabled ? '' : ' off' %>"
+                                                    title="Web Search: Bot can search the web for up-to-date information">🔍</span><span
+                                                    class="feature-icon<%= d.audio_enabled ? '' : ' off' %>"
+                                                    title="Audio: Can listen to voice memos">👂</span><span
+                                                    class="feature-icon<%= d.image_enabled ? '' : ' off' %>"
+                                                    title="Image: Can process image attachments">🖼️</span><span
+                                                    class="feature-icon<%= d.tts_enabled ? '' : ' off' %>"
+                                                    title="TTS: Bot can respond with voice memos">🗣️</span><span
+                                                    class="feature-icon<%= d.authorization_check_enabled ? '' : ' off' %>"
+                                                    title="Auth: Only authorized users can invoke the bot">🔒</span><span
+                                                    class="feature-icon<%= !backgroundGlobalEnabled ? ' global-off' : (d.background_processing_enabled !== 0 ? '' : ' off') %>"
+                                                    title="Memories: Builds and maintains conversation memories<%= !backgroundGlobalEnabled ? ' (globally disabled)' : '' %>">🧠</span><span
+                                                    class="feature-icon<%= d.active_listening_enabled !== 0 ? '' : ' off' %>"
+                                                    title="Active Listening: Bot decides when to respond without being tagged">👀</span>
+                                            </td>
+                                            <td class="actions-cell">
+                                                <button class="outline action-btn labeled-action"
+                                                    onclick="event.stopPropagation(); window.open('<%= basePath %>/groups/<%= encodeURIComponent(d.group_id) %>/chat', '_blank')"
+                                                    title="View Chat">💬 <span class="action-label">Chat</span></button>
+                                                <button class="outline secondary action-btn labeled-action"
+                                                    data-action="deactivate" data-group-id="<%= d.group_id %>"
+                                                    title="Deactivate">⏸ <span
+                                                        class="action-label">Pause</span></button>
+                                            </td>
+                                        </tr>
+                                        <% } %>
+                                            <% for (const d of unconfiguredDms) { %>
+                                                <tr class="group-row inactive">
+                                                    <td>
+                                                        <strong>
+                                                            <%= d.resolved_name || d.group_name || d.group_id %>
+                                                        </strong><br>
+                                                        <small style="color:#999">
+                                                            <%= d.group_id %>
+                                                        </small>
+                                                    </td>
+                                                    <td colspan="3" style="color:#999">Not activated</td>
+                                                    <td class="actions-cell">
+                                                        <button class="action-btn labeled-action" data-action="activate"
+                                                            data-group-id="<%= d.group_id %>" title="Activate">▶ <span
+                                                                class="action-label">Activate</span></button>
+                                                    </td>
+                                                </tr>
+                                                <% } %>
+                                </tbody>
+                            </table>
+                        </figure>
+                        <% } %>
 
-<%- include('footer') %>
+                            <%- include('footer') %>

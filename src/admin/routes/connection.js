@@ -1,60 +1,11 @@
 const express = require('express');
 const router = express.Router();
 const logger = require('../../logger');
+const fs = require('fs').promises;
+const config = require('../../config');
 
-// Track connection state so polling clients always get the current status
-let lastQr = null;
-let connectionStatus = 'waiting';
-let statusMessage = 'Waiting for WhatsApp connection...';
-let statusInfo = null;
-
-// Called from admin-server.js at startup to track state before any browser connects
-function initConnectionCache(client) {
-    client.on('qr', (qr) => {
-        lastQr = qr;
-        connectionStatus = 'qr';
-        statusMessage = 'QR code ready. Scan with WhatsApp.';
-        statusInfo = null;
-    });
-    client.on('authenticated', () => {
-        lastQr = null;
-        connectionStatus = 'authenticated';
-        statusMessage = 'Authenticated successfully. Loading...';
-        statusInfo = null;
-    });
-    client.on('loading_screen', (percent, message) => {
-        connectionStatus = 'loading';
-        statusMessage = 'Loading: ' + percent + '% - ' + message;
-        statusInfo = { percent };
-    });
-    client.on('ready', () => {
-        lastQr = null;
-        connectionStatus = 'ready';
-        statusMessage = 'WhatsApp is connected';
-        statusInfo = {
-            pushname: client.info ? client.info.pushname : null,
-            phone: client.info && client.info.wid ? client.info.wid.user : null
-        };
-    });
-    client.on('auth_failure', (msg) => {
-        lastQr = null;
-        connectionStatus = 'auth_failure';
-        statusMessage = 'Authentication failed: ' + msg;
-        statusInfo = null;
-    });
-    client.on('disconnected', (reason) => {
-        lastQr = null;
-        connectionStatus = 'disconnected';
-        statusMessage = 'Disconnected: ' + reason;
-        statusInfo = null;
-    });
-    client.on('change_state', (state) => {
-        // If authenticated but not ready, show the internal state for diagnostics
-        if (connectionStatus === 'authenticated' || connectionStatus === 'loading') {
-            statusMessage = 'Authenticated. Syncing... (state: ' + state + ')';
-        }
-    });
-}
+// Connection state is now managed by bot.js and exposed via getConnectionState()
+// This module just provides the admin routes that read/write that state.
 
 // Page route
 router.get('/connection', (req, res) => {
@@ -63,72 +14,87 @@ router.get('/connection', (req, res) => {
 
 // Polling endpoint: returns current connection state as JSON
 router.get('/api/connection/status', (req, res) => {
-    const client = req.sharedState.whatsappClient;
-
-    // If status is still 'authenticated' or 'loading' after a while but client.info
-    // is available, don't auto-promote to 'ready' — wait for the actual 'ready' event.
+    const botModule = require('../../bot');
+    const state = botModule.getConnectionState();
 
     const response = {
-        status: connectionStatus,
-        message: statusMessage
+        status: state.status,
+        message: getStatusMessage(state.status)
     };
 
-    if (lastQr) response.qr = lastQr;
-    if (statusInfo) response.info = statusInfo;
+    if (state.lastQr) response.qr = state.lastQr;
+    if (state.lastQrDataUrl) response.qrDataUrl = state.lastQrDataUrl;
+    if (state.info) response.info = state.info;
+    if (state.alert) response.alert = state.alert;
 
     res.json(response);
 });
 
+function getStatusMessage(status) {
+    const messages = {
+        'waiting': 'Waiting for WhatsApp connection...',
+        'qr': 'QR code ready. Scan with WhatsApp.',
+        'loading': 'Connecting to WhatsApp...',
+        'ready': 'WhatsApp is connected',
+        'reconnecting': 'Disconnected. Reconnecting...',
+        'disconnected': 'Disconnected',
+    };
+    return messages[status] || 'Unknown status';
+}
+
 // Disconnect the WhatsApp client
 router.post('/api/connection/disconnect', async (req, res) => {
-    const client = req.sharedState.whatsappClient;
-    logger.info('Connection', `Disconnect requested (current status: ${connectionStatus})`);
-    if (connectionStatus !== 'ready') {
-        logger.warn('Connection', `Disconnect rejected: status is "${connectionStatus}", not "ready"`);
+    const botModule = require('../../bot');
+    const state = botModule.getConnectionState();
+    logger.info('Connection', `Disconnect requested (current status: ${state.status})`);
+
+    if (state.status !== 'ready') {
+        logger.warn('Connection', `Disconnect rejected: status is "${state.status}", not "ready"`);
         return res.status(400).json({ error: 'Bot is not connected' });
     }
+
     try {
-        logger.info('Connection', 'Calling client.logout()...');
-        await client.logout();
-        logger.info('Connection', 'client.logout() completed successfully');
-    } catch (e) {
-        logger.warn('Connection', `client.logout() failed: ${e.message}, falling back to client.destroy()`);
-        try {
-            await client.destroy();
-            logger.info('Connection', 'client.destroy() completed successfully');
-        } catch (e2) {
-            logger.error('Connection', `client.destroy() also failed: ${e2.message}`);
-            return res.status(500).json({ error: 'Failed to disconnect: ' + e.message });
+        const sock = botModule.getSock();
+        if (sock) {
+            logger.info('Connection', 'Calling sock.logout()...');
+            await sock.logout();
+            logger.info('Connection', 'sock.logout() completed successfully');
         }
+        // Delete auth session to force new QR scan
+        try {
+            await fs.rm(config.authSessionPath, { recursive: true, force: true });
+        } catch (e) {
+            logger.warn('Connection', `Failed to delete auth session: ${e.message}`);
+        }
+        res.json({ ok: true });
+    } catch (e) {
+        logger.error('Connection', `Disconnect failed: ${e.message}`);
+        try {
+            const sock = botModule.getSock();
+            if (sock) sock.end(undefined);
+        } catch (e2) {
+            logger.error('Connection', `sock.end() also failed: ${e2.message}`);
+        }
+        res.json({ ok: true, warning: 'Forced disconnect' });
     }
-    lastQr = null;
-    connectionStatus = 'disconnected';
-    statusMessage = 'Disconnected by admin';
-    statusInfo = null;
-    res.json({ ok: true });
 });
 
 // Reconnect the WhatsApp client
 router.post('/api/connection/connect', async (req, res) => {
-    const client = req.sharedState.whatsappClient;
-    logger.info('Connection', `Connect requested (current status: ${connectionStatus})`);
-    if (connectionStatus === 'ready') {
+    const botModule = require('../../bot');
+    const state = botModule.getConnectionState();
+    logger.info('Connection', `Connect requested (current status: ${state.status})`);
+
+    if (state.status === 'ready') {
         return res.status(400).json({ error: 'Bot is already connected' });
     }
-    if (connectionStatus === 'qr' || connectionStatus === 'authenticated' || connectionStatus === 'loading') {
+    if (state.status === 'qr' || state.status === 'loading') {
         return res.status(400).json({ error: 'Connection already in progress' });
     }
+
     try {
-        connectionStatus = 'waiting';
-        statusMessage = 'Reconnecting...';
-        statusInfo = null;
-        lastQr = null;
-        logger.info('Connection', 'Calling client.initialize()...');
-        client.initialize().catch((err) => {
-            logger.error('Connection', `client.initialize() failed: ${err.message}`);
-            connectionStatus = 'disconnected';
-            statusMessage = 'Reconnection failed: ' + err.message;
-        });
+        logger.info('Connection', 'Starting new socket connection...');
+        botModule.startSocket();
         res.json({ ok: true });
     } catch (e) {
         logger.error('Connection', `Connect failed: ${e.message}`);
@@ -137,7 +103,13 @@ router.post('/api/connection/connect', async (req, res) => {
 });
 
 function getConnectionStatus() {
-    return connectionStatus;
+    const botModule = require('../../bot');
+    return botModule.getConnectionState().status;
 }
 
-module.exports = { router, initConnectionCache, getConnectionStatus };
+// These are no longer needed since bot.js manages connection state directly,
+// but we keep them as no-ops for backward compatibility with admin-server.js
+function initConnectionCache() {}
+function reattachConnectionListeners() {}
+
+module.exports = { router, initConnectionCache, reattachConnectionListeners, getConnectionStatus };

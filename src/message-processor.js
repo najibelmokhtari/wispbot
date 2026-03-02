@@ -35,6 +35,8 @@ function formatQuotedMessage(msg, config) {
         let quotedContent = msg.quotedMsg.body;
         if (msg.quotedMsg.imageId) {
             quotedContent = `Image: ${msg.quotedMsg.imageId}`;
+        } else if (msg.quotedMsg.audioId) {
+            quotedContent = `Audio: ${msg.quotedMsg.audioId}`;
         }
         const truncatedQuote = truncateMessage(quotedContent);
         const quotedAlias = replacePhoneNumbersWithUsernames(msg.quotedParticipant);
@@ -43,6 +45,10 @@ function formatQuotedMessage(msg, config) {
 
     if (msg.imageId) {
         result += ` (Image: ${msg.imageId})`;
+    }
+
+    if (msg.audio_id) {
+        result += ` (Audio: ${msg.audio_id})`;
     }
 
     return result;

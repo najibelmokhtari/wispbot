@@ -4,7 +4,7 @@ const phoneToUsernameMap = new Map();
 function replacePhoneNumbersWithUsernames(text) {
     if (typeof text !== 'string') return text;
 
-    return text.replace(/(\d+@c\.us|\d+)/g, (match) => {
+    return text.replace(/(\d+@c\.us|\d{7,15})/g, (match) => {
         const fullId = match.includes('@c.us') ? match : `${match}@c.us`;
         if (phoneToUsernameMap.has(fullId)) {
             return phoneToUsernameMap.get(fullId);

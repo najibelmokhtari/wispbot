@@ -14,7 +14,7 @@ const {
     upsertUser
 } = require('../../db');
 
-// Resolve missing names from WhatsApp client and cache in DB
+// Resolve missing names — uses the client adapter's getContactById (DB-backed)
 async function resolveNames(users, client) {
     if (!client) return users;
     for (const u of users) {
@@ -22,7 +22,7 @@ async function resolveNames(users, client) {
         try {
             const contact = await client.getContactById(u.id);
             const resolved = contact.pushname || contact.name || null;
-            if (resolved) {
+            if (resolved && resolved !== u.id.split('@')[0]) {
                 u.name = resolved;
                 await upsertUser(u.id, resolved);
             }

@@ -1,0 +1,541 @@
+<%- include('layout') %>
+
+    <h2>Usage</h2>
+
+    <!-- Usage Hard Limit -->
+    <article id="usage-limit-card">
+        <header><strong>Spending Limit</strong></header>
+        <div style="display:flex; gap:1.5rem; align-items:flex-start; flex-wrap:wrap">
+            <div style="flex:1; min-width:220px">
+                <label for="usage-limit-input">Hard Limit (USD)</label>
+                <small class="field-desc">When spending in the current period exceeds this amount, the bot will be
+                    automatically disabled. Leave empty for no limit.</small>
+                <div class="inline-form">
+                    <input type="number" id="usage-limit-input" min="0" step="0.01" placeholder="No limit"
+                        style="max-width:150px">
+                    <button onclick="saveUsageLimit()">Save</button>
+                </div>
+
+                <fieldset style="margin-top:0.75rem; border:1px solid #ddd; border-radius:6px; padding:0.5rem 0.75rem">
+                    <legend style="font-size:0.85rem; font-weight:600; padding:0 0.35rem">Reset Mode</legend>
+                    <label
+                        style="display:flex; align-items:flex-start; gap:0.5rem; margin-bottom:0.5rem; cursor:pointer; font-size:0.9rem">
+                        <input type="radio" name="cap-mode" value="monthly" onchange="onCapModeChange()"
+                            style="margin-top:3px; width:1rem; height:1rem; min-width:1rem; border-radius:50%; appearance:auto; -webkit-appearance:auto">
+                        <span>
+                            <strong>Monthly</strong><br>
+                            <small style="color:#666">Spending resets automatically on the 1st of each month (UTC). Bot
+                                re-enables at the start of each new month.</small>
+                        </span>
+                    </label>
+                    <label style="display:flex; align-items:flex-start; gap:0.5rem; cursor:pointer; font-size:0.9rem">
+                        <input type="radio" name="cap-mode" value="manual" onchange="onCapModeChange()"
+                            style="margin-top:3px; width:1rem; height:1rem; min-width:1rem; border-radius:50%; appearance:auto; -webkit-appearance:auto">
+                        <span>
+                            <strong>Manual</strong><br>
+                            <small style="color:#666">Spending resets only when you click the reset button. Bot stays
+                                disabled until you manually reset.</small>
+                        </span>
+                    </label>
+                </fieldset>
+            </div>
+            <div style="flex:1; min-width:200px">
+                <div id="usage-limit-status" style="display:flex; flex-direction:column; gap:0.5rem">
+                    <p aria-busy="true" style="margin:0">Loading...</p>
+                </div>
+            </div>
+        </div>
+    </article>
+
+    <div style="margin-bottom:1rem; display:flex; gap:0.75rem; align-items:center; flex-wrap:wrap">
+        <select id="usage-period" onchange="switchUsageTab(currentTab)"
+            style="width:auto;display:inline-block;margin-bottom:0">
+            <option value="7d">Last 7 days</option>
+            <option value="30d" selected>Last 30 days</option>
+            <option value="all">All time</option>
+        </select>
+        <span id="global-summary" style="display:flex;gap:1rem;flex-wrap:wrap"></span>
+    </div>
+
+    <!-- Tabs -->
+    <div style="display:flex;gap:0;border-bottom:2px solid #ddd;margin-bottom:1.25rem">
+        <button class="usage-tab active" data-tab="overview" onclick="switchUsageTab('overview')">Overview</button>
+        <button class="usage-tab" data-tab="by-group" onclick="switchUsageTab('by-group')">By Group</button>
+        <button class="usage-tab" data-tab="by-user" onclick="switchUsageTab('by-user')">By User</button>
+        <button class="usage-tab" data-tab="by-model" onclick="switchUsageTab('by-model')">By Model</button>
+    </div>
+
+    <!-- Tab panels -->
+    <div id="tab-overview" class="usage-panel"></div>
+    <div id="tab-by-group" class="usage-panel" style="display:none"></div>
+    <div id="tab-by-user" class="usage-panel" style="display:none"></div>
+    <div id="tab-by-model" class="usage-panel" style="display:none"></div>
+
+    <style>
+        .usage-tab {
+            background: none;
+            border: none;
+            border-bottom: 3px solid transparent;
+            padding: 0.5rem 1.25rem;
+            cursor: pointer;
+            font-size: 0.95rem;
+            color: #666;
+            margin-bottom: -2px;
+            transition: color 0.15s, border-color 0.15s;
+        }
+
+        .usage-tab:hover {
+            color: #333;
+        }
+
+        .usage-tab.active {
+            color: #1565c0;
+            border-bottom-color: #1565c0;
+            font-weight: 600;
+        }
+
+        .summary-card {
+            background: #f5f5f5;
+            border-radius: 8px;
+            padding: 0.4rem 0.9rem;
+            display: inline-flex;
+            flex-direction: column;
+            align-items: center;
+            min-width: 90px;
+        }
+
+        .summary-card .label {
+            font-size: 0.7rem;
+            color: #888;
+            text-transform: uppercase;
+        }
+
+        .summary-card .value {
+            font-size: 1.1rem;
+            font-weight: 700;
+        }
+
+        .clickable-row {
+            cursor: pointer;
+        }
+
+        .clickable-row:hover {
+            background: rgba(21, 101, 192, 0.04);
+        }
+    </style>
+
+    <script>
+var BASE = '<%= basePath %>';
+let currentTab = 'overview';
+let globalData = null;
+
+function fmt(n) { return n != null ? n.toLocaleString() : '0'; }
+function fmtCost(n) { return n != null ? '$' + n.toFixed(4) : '$0.0000'; }
+function fmtCostShort(n) { return n != null ? '$' + n.toFixed(2) : '$0.00'; }
+
+function switchUsageTab(tab) {
+    currentTab = tab;
+    document.querySelectorAll('.usage-tab').forEach(b => {
+        b.classList.toggle('active', b.dataset.tab === tab);
+    });
+    document.querySelectorAll('.usage-panel').forEach(p => p.style.display = 'none');
+    document.getElementById('tab-' + tab).style.display = '';
+
+    if (tab === 'by-group' && document.getElementById('group-select')) {
+        // If group tab already has a selector, don't reload global
+        return;
+    }
+    loadGlobalData();
+}
+
+async function loadGlobalData() {
+    const period = document.getElementById('usage-period').value;
+
+    // Show loading on active panel
+    const activePanel = document.getElementById('tab-' + currentTab);
+    if (currentTab !== 'by-group') {
+        activePanel.innerHTML = '<p aria-busy="true">Loading usage data…</p>';
+    }
+
+    try {
+        const res = await fetch(`${BASE}/api/usage/global?period=${period}`);
+        if (!res.ok) throw new Error('Failed');
+        globalData = await res.json();
+
+        renderSummary();
+
+        if (currentTab === 'overview') renderOverview();
+        else if (currentTab === 'by-group') renderByGroup();
+        else if (currentTab === 'by-user') renderByUser();
+        else if (currentTab === 'by-model') renderByModel();
+    } catch (e) {
+        activePanel.innerHTML = '<p style="color:#c62828">Failed to load usage data.</p>';
+    }
+}
+
+function renderSummary() {
+    if (!globalData) return;
+    const t = globalData.totals;
+    const ttsCost = t.tts_cost_usd || 0;
+    const llmCost = (t.cost_usd || 0) - ttsCost;
+    document.getElementById('global-summary').innerHTML =
+        `<span class="summary-card"><span class="label">Total Cost</span><span class="value">${fmtCostShort(t.cost_usd)}</span></span>` +
+        `<span class="summary-card"><span class="label">LLM Cost</span><span class="value">${fmtCostShort(llmCost)}</span></span>` +
+        `<span class="summary-card"><span class="label">TTS Cost</span><span class="value">${fmtCostShort(ttsCost)}</span></span>` +
+        `<span class="summary-card"><span class="label">API Calls</span><span class="value">${fmt(t.call_count)}</span></span>`;
+}
+
+function buildTable(headers, rows) {
+    let html = '<table><thead><tr>';
+    for (const h of headers) html += `<th>${h}</th>`;
+    html += '</tr></thead><tbody>';
+    for (const row of rows) {
+        const cls = row._clickable ? ' class="clickable-row" onclick="' + row._clickable + '"' : '';
+        html += `<tr${cls}>`;
+        for (const h of headers) html += `<td>${row[h] ?? ''}</td>`;
+        html += '</tr>';
+    }
+    html += '</tbody></table>';
+    return html;
+}
+
+function usageRow(row) {
+    const tts = row.tts_cost_usd || 0;
+    const llm = (row.cost_usd || 0) - tts;
+    return {
+        'Calls': fmt(row.call_count),
+        'Input': fmt(row.input_tokens),
+        'Output': fmt(row.output_tokens),
+        'Cached': fmt(row.cached_tokens),
+        'LLM Cost': fmtCost(llm),
+        'TTS Cost': fmtCost(tts),
+        'Total': fmtCost(row.cost_usd)
+    };
+}
+
+function renderOverview() {
+    const panel = document.getElementById('tab-overview');
+    if (!globalData || globalData.totals.call_count === 0) {
+        panel.innerHTML = '<p><small>No usage data for this period.</small></p>';
+        return;
+    }
+
+    let html = '';
+
+    // Totals
+    const t = globalData.totals;
+    const ttsCost = t.tts_cost_usd || 0;
+    const llmCost = (t.cost_usd || 0) - ttsCost;
+    html += '<h5 style="margin-bottom:0.25rem">Totals</h5>';
+    html += '<table><thead><tr><th>Calls</th><th>Input Tokens</th><th>Output Tokens</th><th>Cached Tokens</th><th>LLM Cost</th><th>TTS Cost</th><th>Total Cost</th></tr></thead>';
+    html += `<tbody><tr><td>${fmt(t.call_count)}</td><td>${fmt(t.input_tokens)}</td><td>${fmt(t.output_tokens)}</td><td>${fmt(t.cached_tokens)}</td><td>${fmtCost(llmCost)}</td><td>${fmtCost(ttsCost)}</td><td>${fmtCost(t.cost_usd)}</td></tr></tbody></table>`;
+
+    // By Group
+    if (globalData.byGroup.length > 0) {
+        html += '<h5 style="margin-top:1.5rem;margin-bottom:0.25rem">By Group</h5>';
+        const headers = ['Group', 'Calls', 'LLM Cost', 'TTS Cost', 'Total'];
+        const rows = globalData.byGroup.map(row => {
+            const tts = row.tts_cost_usd || 0;
+            const llm = (row.cost_usd || 0) - tts;
+            return {
+                'Group': row.group_name,
+                'Calls': fmt(row.call_count),
+                'LLM Cost': fmtCost(llm),
+                'TTS Cost': fmtCost(tts),
+                'Total': fmtCost(row.cost_usd),
+                _clickable: `selectGroupTab('${row.group_id.replace(/'/g, "\\'")}')`
+            };
+        });
+        html += buildTable(headers, rows);
+    }
+
+    // By Model
+    if (globalData.byModel.length > 0) {
+        html += '<h5 style="margin-top:1.5rem;margin-bottom:0.25rem">By Model</h5>';
+        const headers = ['Model', 'Calls', 'Input', 'Output', 'Cached', 'LLM Cost', 'TTS Cost', 'Total'];
+        const rows = globalData.byModel.map(row => ({
+            'Model': row.ai_model || 'unknown',
+            ...usageRow(row)
+        }));
+        html += buildTable(headers, rows);
+    }
+
+    panel.innerHTML = html;
+}
+
+function selectGroupTab(groupId) {
+    switchUsageTab('by-group');
+    // Wait for group tab to render, then select the group
+    setTimeout(() => {
+        const sel = document.getElementById('group-select');
+        if (sel) {
+            sel.value = groupId;
+            loadGroupUsage(groupId);
+        }
+    }, 100);
+}
+
+function renderByGroup() {
+    const panel = document.getElementById('tab-by-group');
+    if (!globalData || globalData.byGroup.length === 0) {
+        panel.innerHTML = '<p><small>No usage data for this period.</small></p>';
+        return;
+    }
+
+    let html = '<div style="margin-bottom:1rem;display:flex;gap:0.75rem;align-items:center;flex-wrap:wrap">';
+    html += '<select id="group-select" onchange="loadGroupUsage(this.value)" style="width:auto;display:inline-block;margin-bottom:0">';
+    html += '<option value="">Select a group…</option>';
+    for (const g of globalData.byGroup) {
+        html += `<option value="${g.group_id}">${g.group_name} (${fmtCostShort(g.cost_usd)})</option>`;
+    }
+    html += '</select>';
+    html += '<span id="group-billing-controls"></span>';
+    html += '</div>';
+    html += '<div id="group-usage-detail"></div>';
+    panel.innerHTML = html;
+}
+
+async function loadGroupUsage(groupId) {
+    if (!groupId) {
+        document.getElementById('group-usage-detail').innerHTML = '';
+        document.getElementById('group-billing-controls').innerHTML = '';
+        return;
+    }
+
+    const container = document.getElementById('group-usage-detail');
+    container.innerHTML = '<p aria-busy="true">Loading…</p>';
+
+    // Determine period - check for group-specific period selector
+    let period = document.getElementById('usage-period').value;
+    const groupPeriod = document.getElementById('group-period');
+    if (groupPeriod) period = groupPeriod.value;
+
+    try {
+        const res = await fetch(`${BASE}/api/groups/${encodeURIComponent(groupId)}/usage?period=${period}`);
+        if (!res.ok) throw new Error('Failed');
+        const data = await res.json();
+
+        // Billing controls
+        let controls = '';
+        controls += `<select id="group-period" onchange="loadGroupUsage('${groupId.replace(/'/g, "\\'")}')" style="width:auto;display:inline-block;margin-bottom:0">`;
+        controls += `<option value="7d"${period==='7d'?' selected':''}>7 days</option>`;
+        controls += `<option value="30d"${period==='30d'?' selected':''}>30 days</option>`;
+        if (data.resetDate) {
+            controls += `<option value="since_reset"${period==='since_reset'?' selected':''}>Since last reset</option>`;
+        }
+        controls += `<option value="all"${period==='all'?' selected':''}>All time</option>`;
+        controls += '</select>';
+        controls += `<button class="outline secondary" style="padding:0.35rem 0.75rem;font-size:0.85rem;margin-bottom:0" onclick="resetGroupUsage('${groupId.replace(/'/g, "\\'")}')">Mark Billing Cycle</button>`;
+        if (data.resetDate) {
+            const d = new Date(data.resetDate);
+            controls += `<small style="color:#999">Last reset: ${d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit' })}</small>`;
+        }
+        document.getElementById('group-billing-controls').innerHTML = controls;
+
+        if (data.totals.call_count === 0) {
+            container.innerHTML = '<p><small>No usage data for this period.</small></p>';
+            return;
+        }
+
+        const ttsCost = data.totals.tts_cost_usd || 0;
+        const llmCost = (data.totals.cost_usd || 0) - ttsCost;
+
+        let html = '<h5 style="margin-bottom:0.25rem">Totals</h5>';
+        html += '<table><thead><tr><th>Calls</th><th>Input Tokens</th><th>Output Tokens</th><th>Cached Tokens</th><th>LLM Cost</th><th>TTS Cost</th><th>Total Cost</th></tr></thead>';
+        html += `<tbody><tr><td>${fmt(data.totals.call_count)}</td><td>${fmt(data.totals.input_tokens)}</td><td>${fmt(data.totals.output_tokens)}</td><td>${fmt(data.totals.cached_tokens)}</td><td>${fmtCost(llmCost)}</td><td>${fmtCost(ttsCost)}</td><td>${fmtCost(data.totals.cost_usd)}</td></tr></tbody></table>`;
+
+        if (data.byModel.length > 0) {
+            html += '<h5 style="margin-top:1.5rem;margin-bottom:0.25rem">By Model</h5>';
+            html += '<table><thead><tr><th>Model</th><th>Calls</th><th>Input</th><th>Output</th><th>Cached</th><th>LLM Cost</th><th>TTS Cost</th><th>Total</th></tr></thead><tbody>';
+            for (const row of data.byModel) {
+                const rowTts = row.tts_cost_usd || 0;
+                const rowLlm = (row.cost_usd || 0) - rowTts;
+                html += `<tr><td>${row.ai_model || 'unknown'}</td><td>${fmt(row.call_count)}</td><td>${fmt(row.input_tokens)}</td><td>${fmt(row.output_tokens)}</td><td>${fmt(row.cached_tokens)}</td><td>${fmtCost(rowLlm)}</td><td>${fmtCost(rowTts)}</td><td>${fmtCost(row.cost_usd)}</td></tr>`;
+            }
+            html += '</tbody></table>';
+        }
+
+        if (data.byUser.length > 0) {
+            html += '<h5 style="margin-top:1.5rem;margin-bottom:0.25rem">By User</h5>';
+            html += '<table><thead><tr><th>User</th><th>Calls</th><th>Input</th><th>Output</th><th>Cached</th><th>LLM Cost</th><th>TTS Cost</th><th>Total</th></tr></thead><tbody>';
+            for (const row of data.byUser) {
+                const rowTts = row.tts_cost_usd || 0;
+                const rowLlm = (row.cost_usd || 0) - rowTts;
+                html += `<tr><td>${row.user_name}</td><td>${fmt(row.call_count)}</td><td>${fmt(row.input_tokens)}</td><td>${fmt(row.output_tokens)}</td><td>${fmt(row.cached_tokens)}</td><td>${fmtCost(rowLlm)}</td><td>${fmtCost(rowTts)}</td><td>${fmtCost(row.cost_usd)}</td></tr>`;
+            }
+            html += '</tbody></table>';
+        }
+
+        container.innerHTML = html;
+    } catch (e) {
+        container.innerHTML = '<p style="color:#c62828">Failed to load group usage.</p>';
+    }
+}
+
+async function resetGroupUsage(groupId) {
+    if (!confirm('Set a new billing cycle marker at the current date/time? This does not delete any data — it just sets a reference point for the "Since last reset" filter.')) return;
+    try {
+        const res = await fetch(`${BASE}/api/groups/${encodeURIComponent(groupId)}/usage/reset`, { method: 'POST' });
+        if (!res.ok) throw new Error('Failed');
+        loadGroupUsage(groupId);
+    } catch (e) {
+        alert('Failed to set billing cycle marker.');
+    }
+}
+
+function renderByUser() {
+    const panel = document.getElementById('tab-by-user');
+    if (!globalData || globalData.byUser.length === 0) {
+        panel.innerHTML = '<p><small>No usage data for this period.</small></p>';
+        return;
+    }
+
+    const headers = ['User', 'Calls', 'Input', 'Output', 'Cached', 'LLM Cost', 'TTS Cost', 'Total'];
+    const rows = globalData.byUser.map(row => ({
+        'User': row.user_name,
+        ...usageRow(row)
+    }));
+    panel.innerHTML = '<h5 style="margin-bottom:0.25rem">Usage by User (All Groups)</h5>' + buildTable(headers, rows);
+}
+
+function renderByModel() {
+    const panel = document.getElementById('tab-by-model');
+    if (!globalData || globalData.byModel.length === 0) {
+        panel.innerHTML = '<p><small>No usage data for this period.</small></p>';
+        return;
+    }
+
+    const headers = ['Model', 'Calls', 'Input', 'Output', 'Cached', 'LLM Cost', 'TTS Cost', 'Total'];
+    const rows = globalData.byModel.map(row => ({
+        'Model': row.ai_model || 'unknown',
+        ...usageRow(row)
+    }));
+    panel.innerHTML = '<h5 style="margin-bottom:0.25rem">Usage by Model (All Groups)</h5>' + buildTable(headers, rows);
+}
+
+// --- Usage Limit ---
+let currentCapMode = 'manual';
+
+function onCapModeChange() {
+    // Auto-save mode when radio changes
+    saveUsageLimit();
+}
+
+async function loadLimitStatus() {
+    try {
+        const res = await fetch(`${BASE}/api/usage/limit-status`);
+        if (!res.ok) throw new Error('Failed');
+        const data = await res.json();
+
+        // Populate input
+        const input = document.getElementById('usage-limit-input');
+        if (data.limit != null) input.value = data.limit;
+        else input.value = '';
+
+        // Set mode radio
+        currentCapMode = data.mode || 'manual';
+        const radios = document.querySelectorAll('input[name="cap-mode"]');
+        radios.forEach(r => r.checked = r.value === currentCapMode);
+
+        // Build status display
+        const container = document.getElementById('usage-limit-status');
+        const spent = data.spent || 0;
+        const limit = data.limit;
+        const pct = limit ? Math.min((spent / limit) * 100, 100) : 0;
+        const isOver = limit && spent >= limit;
+        const isNear = limit && spent >= limit * 0.8 && !isOver;
+        const isMonthly = currentCapMode === 'monthly';
+
+        let html = '';
+        if (limit) {
+            const barColor = isOver ? '#c62828' : isNear ? '#e65100' : '#2e7d32';
+            html += `<div><strong>Spent:</strong> $${spent.toFixed(4)} / $${limit.toFixed(2)}</div>`;
+            html += `<div style="background:#e0e0e0; border-radius:4px; height:8px; width:100%; max-width:250px">`;
+            html += `<div style="background:${barColor}; height:100%; border-radius:4px; width:${pct.toFixed(1)}%; transition:width 0.3s"></div></div>`;
+            if (isOver) {
+                if (isMonthly) {
+                    // Calculate next month 1st for the re-enable message
+                    const now = new Date();
+                    const nextMonth = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1));
+                    const nextStr = nextMonth.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+                    html += `<small style="color:#c62828; font-weight:600">Limit exceeded — will reset on ${nextStr}.</small>`;
+                } else {
+                    html += `<small style="color:#c62828; font-weight:600">Limit exceeded. You can reset cycle manually.</small>`;
+                }
+            } else if (isNear) {
+                html += `<small style="color:#e65100">Approaching limit (${pct.toFixed(0)}% used).</small>`;
+            }
+        } else {
+            html += `<div><strong>Spent in current period:</strong> $${spent.toFixed(4)}</div>`;
+            html += `<small style="color:#666">No limit configured.</small>`;
+        }
+
+        // Show current billing period
+        if (data.resetDate) {
+            const d = new Date(data.resetDate + (data.resetDate.includes('Z') ? '' : 'Z'));
+            if (isMonthly) {
+                html += `<small style="color:#999">Current period: ${d.toLocaleDateString(undefined, { month: 'long', year: 'numeric' })}</small>`;
+            } else {
+                html += `<small style="color:#999">Period start: ${d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit' })}</small>`;
+            }
+        }
+
+        // Reset button — only in manual mode
+        if (!isMonthly) {
+            html += `<div style="margin-top:0.5rem"><button class="outline secondary" style="padding:0.35rem 0.75rem; font-size:0.85rem; margin:0" onclick="resetUsageCycle()">Reset Billing Cycle</button></div>`;
+        }
+
+        container.innerHTML = html;
+
+        // Re-wire dirty tracking for the limit input after load
+        markClean('usage-limit-input');
+    } catch (e) {
+        document.getElementById('usage-limit-status').innerHTML = '<small style="color:#c62828">Failed to load limit status.</small>';
+    }
+}
+
+async function saveUsageLimit() {
+    const input = document.getElementById('usage-limit-input');
+    const val = input.value.trim();
+    const modeRadio = document.querySelector('input[name="cap-mode"]:checked');
+    const mode = modeRadio ? modeRadio.value : currentCapMode;
+    try {
+        const res = await fetch(`${BASE}/api/usage/limit`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ limit: val === '' ? '' : val, mode })
+        });
+        if (!res.ok) throw new Error('Failed');
+        showToast('Spending limit saved', 'success');
+        markClean('usage-limit-input');
+        loadLimitStatus();
+    } catch (e) {
+        showToast('Failed to save spending limit', 'error');
+    }
+}
+
+async function resetUsageCycle() {
+    if (!confirm('Reset the billing cycle? This sets the spending counter to $0 from now and re-enables the bot if it was disabled by the limit.')) return;
+    try {
+        const res = await fetch(`${BASE}/api/usage/reset`, { method: 'POST' });
+        if (!res.ok) throw new Error('Failed');
+        showToast('Billing cycle reset — bot re-enabled', 'success');
+        loadLimitStatus();
+        loadGlobalData();
+        // Update nav indicator if present
+        const navIndicator = document.getElementById('bot-active-nav-indicator');
+        if (navIndicator) navIndicator.style.display = 'none';
+    } catch (e) {
+        showToast('Failed to reset billing cycle', 'error');
+    }
+}
+
+    </script>
+
+    <%- include('footer') %>
+
+    <script>
+    // Init after admin.js is loaded (from footer)
+    loadLimitStatus();
+    loadGlobalData();
+    </script>
