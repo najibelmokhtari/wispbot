@@ -1,4 +1,4 @@
-# 🍌 Wispbot — WhatsApp Group Chat AI Assistant
+# Wispbot — WhatsApp Group AI Companion
 
 ---
 
