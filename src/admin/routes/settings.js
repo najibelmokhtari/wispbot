@@ -69,7 +69,7 @@ router.post('/api/settings', async (req, res) => {
             'active_listening_ai_model',
             'default_active_listening', 'default_active_listening_throttle_ms', 'default_active_listening_context_count',
             'default_al_send_audio', 'default_al_send_images', 'default_al_audio_count', 'default_al_image_count',
-            'offline_message_mode', 'bot_activation_mode',
+            'offline_message_mode', 'bot_activation_mode', 'error_reporting_mode',
             'usage_hard_limit', 'usage_limit_reset_date', 'usage_cap_mode'
         ];
         for (const [key, value] of Object.entries(req.body)) {

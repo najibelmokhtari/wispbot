@@ -2,7 +2,10 @@
 
 An AI-powered WhatsApp group chat bot with a web-based admin panel. Built with [Baileys](https://github.com/WhiskeySockets/Baileys) and Google Gemini.
 
-> **Disclaimer:** This project uses [Baileys](https://github.com/WhiskeySockets/Baileys), an unofficial, reverse-engineered WhatsApp Web client. This is **not** sanctioned by WhatsApp — using it violates their Terms of Service and your account could be temporarily or permanently banned. Use a dedicated phone number you can afford to lose, not your personal one.
+- **Lightweight and self-hosted** — Runs on a single Node.js process with SQLite. No cloud infrastructure, no Docker required, no external dependencies beyond a Gemini API key.
+- **A chat bot, not an AI agent** — WispBot lives inside your group chats and responds when spoken to. It doesn't browse the web on your behalf, execute code, manage your calendar, or take actions outside the conversation. Your machine stays yours.
+- **Privacy-first** — All data stays on your server. Nothing is shared with third parties beyond the API calls needed to generate responses.
+- **Zero-config setup** — A guided wizard gets you from `npm start` to a working bot in under two minutes. No `.env` editing required.
 
 ---
 
@@ -249,6 +252,12 @@ rm data/database.sqlite*
 ```
 
 The bot will recreate the database with empty tables on next startup.
+
+---
+
+## Disclaimer
+
+This project uses [Baileys](https://github.com/WhiskeySockets/Baileys), an unofficial, reverse-engineered WhatsApp Web client. This is **not** sanctioned by WhatsApp — using it violates their Terms of Service and your account could be temporarily or permanently banned. Use a dedicated phone number you can afford to lose, not your personal one.
 
 ---
 

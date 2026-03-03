@@ -188,6 +188,19 @@
             (active listening off), responds to the last mention or reply-to-bot. In active listening mode, feeds the
             last message to the active listener to decide whether to respond.
         </small>
+
+        <h5 style="margin-top:1.5rem; margin-bottom:0.25rem">Error Reporting</h5>
+        <small class="section-desc">Controls how LLM errors (e.g. API failures) are reported. Errors are always logged to the server console regardless of this setting.</small>
+
+        <label for="error-reporting-mode">Mode</label>
+        <select id="error-reporting-mode" onchange="updateDefaultDropdown('error_reporting_mode', this.value)">
+            <option value="send_to_chat" <%=(settings.error_reporting_mode || 'send_to_chat')==='send_to_chat' ? 'selected' : '' %>>Send to Chat</option>
+            <option value="log_only" <%=(settings.error_reporting_mode)==='log_only' ? 'selected' : '' %>>Log Only</option>
+        </select>
+        <small class="field-desc">
+            <strong>Send to Chat</strong> — Sends an error message to the group where the error occurred (e.g. "Sorry, I encountered an error...").<br>
+            <strong>Log Only</strong> — Errors are only logged to the server console. No error message is sent to the group.
+        </small>
     </article>
 
     <!-- Defaults for New Groups -->

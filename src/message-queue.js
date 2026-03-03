@@ -545,12 +545,17 @@ class MessageQueueManager {
             } catch (error) {
                 logger.error('Queue', `Error processing message in ${groupId} from ${senderId}: ${error.message}`);
                 try {
-                    const errorMsg = error.message || '';
-                    const isQuotaError = errorMsg.includes('quota') || errorMsg.includes('Quota') || errorMsg.includes('RESOURCE_EXHAUSTED') || errorMsg.includes('rate limit') || errorMsg.includes('429');
-                    const userMessage = isQuotaError
-                        ? `Oops! It looks like I've hit my API usage limit for now. This usually means the current plan's quota has been exceeded for the AI model configured in this group (${aiModel}). Please try again later or ask the admin to check the API plan/billing/model.`
-                        : 'Sorry, I encountered an error while processing your request.';
-                    await client.sendMessage(message.from, userMessage);
+                    const errorReportingMode = (await getBotSetting('error_reporting_mode')) || 'send_to_chat';
+                    if (errorReportingMode === 'send_to_chat') {
+                        const errorMsg = error.message || '';
+                        const isQuotaError = errorMsg.includes('quota') || errorMsg.includes('Quota') || errorMsg.includes('RESOURCE_EXHAUSTED') || errorMsg.includes('rate limit') || errorMsg.includes('429');
+                        const userMessage = isQuotaError
+                            ? `Oops! It looks like I've hit my API usage limit for now. This usually means the current plan's quota has been exceeded for the AI model configured in this group (${aiModel}). Please try again later or ask the admin to check the API plan/billing/model.`
+                            : 'Sorry, I encountered an error while processing your request.';
+                        await client.sendMessage(message.from, userMessage);
+                    } else {
+                        logger.warn('Queue', `Suppressed error message for ${groupId} (error_reporting_mode: ${errorReportingMode})`);
+                    }
                 } catch (sendError) {
                     logger.error('Queue', `Failed to send error message to ${groupId}: ${sendError.message}`);
                 }
