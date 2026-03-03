@@ -1,4 +1,12 @@
-# WhatsApp Group Bot
+# 🍌 Wispbot — WhatsApp Group Chat AI Assistant
+
+---
+
+<p align="center">
+  <img src="assets/wispbot-logo.jpg" alt="Wispbot Logo" width="500">
+</p>
+
+---
 
 An AI-powered WhatsApp group chat bot with a web-based admin panel. Built with [Baileys](https://github.com/WhiskeySockets/Baileys) and Google Gemini.
 
