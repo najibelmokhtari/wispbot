@@ -2,10 +2,16 @@
 
 An AI-powered WhatsApp group chat bot with a web-based admin panel. Built with [Baileys](https://github.com/WhiskeySockets/Baileys) and Google Gemini.
 
-- **Lightweight and self-hosted** — Runs on a single Node.js process with SQLite. No cloud infrastructure, no Docker required, no external dependencies beyond a Gemini API key.
+```bash
+git clone https://github.com/najibelmokhtari/wispbot.git && cd wispbot
+npm install
+npm start
+```
+
+- **Three commands to a working bot** — Clone, install, start. A guided wizard handles API keys, admin password, and WhatsApp QR scanning. No `.env` editing required.
+- **Lightweight and self-hosted** — Runs on a single Node.js process with SQLite. No cloud infrastructure, no Docker, no external dependencies beyond a Gemini API key.
 - **A chat bot, not an AI agent** — WispBot lives inside your group chats and responds when spoken to. It doesn't browse the web on your behalf, execute code, manage your calendar, or take actions outside the conversation. Your machine stays yours.
 - **Privacy-first** — All data stays on your server. Nothing is shared with third parties beyond the API calls needed to generate responses.
-- **Zero-config setup** — A guided wizard gets you from `npm start` to a working bot in under two minutes. No `.env` editing required.
 
 ---
 
