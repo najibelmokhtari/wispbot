@@ -16,10 +16,11 @@ npm install
 npm start
 ```
 
-- **Three commands to a working bot** — Clone, install, start. A guided wizard handles API keys, admin password, and WhatsApp QR scanning. No `.env` editing required.
-- **Lightweight and self-hosted** — Runs on a single Node.js process with SQLite. No cloud infrastructure, no Docker, no external dependencies beyond a Gemini API key.
-- **A chat bot, not an AI agent** — WispBot lives inside your group chats and responds when spoken to. It doesn't browse the web on your behalf, execute code, manage your calendar, or take actions outside the conversation. Your machine stays yours.
-- **Privacy-first** — All data stays on your server. Nothing is shared with third parties beyond the API calls needed to generate responses.
+- **Fact-check, brainstorm, role-play, or just have fun** — Useful in serious discussions and casual chats alike. Configurable personas can be used in each group.
+- **Three commands to a working bot** — Clone, install, start. A guided wizard handles the rest — no `.env` editing required.
+- **Lightweight and self-hosted** — Single Node.js process, SQLite, no cloud infra or Docker. All data stays on your machine.
+- **Memory & active listening** — Remembers each group's context over time and can decide on its own when to chime in — or be configured to stay quiet until @mentioned.
+- **A companion, not an agent** — Lives inside your group chats. Doesn't take actions outside the conversation. This is not an autonomous agent like OpenClaw. It will do nothing on your machine other than chat.
 
 ---
 
