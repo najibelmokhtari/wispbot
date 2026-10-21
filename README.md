@@ -32,7 +32,7 @@ npm start
 - **Custom personas** — Hot-swappable AI personalities via `.persona` files with metadata, voice, and TTS style
 - **Community personas** — Browse and install personas from a shared [community repo](https://github.com/najibelmokhtari/wispbot-personas)
 - **Message batching** — Groups rapid messages into a single context window before replying
-- **Text-to-speech** — Generate audio responses via Gemini TTS or Google Cloud Vertex AI
+- **Text-to-speech** — Generate audio responses via Gemini TTS
 - **Image understanding** — Reads and describes images sent in the chat
 - **Audio understanding** — Processes voice messages and audio files
 - **Web search** — Can search the web and summarize results (toggleable per group)
@@ -47,7 +47,7 @@ npm start
 
 - Node.js 18+
 - Google Gemini API key ([get one here](https://aistudio.google.com/))
-- (Optional) Google Cloud service account for Vertex AI TTS
+- (Optional) A Google Cloud service account instead of an API key (calls go through Vertex AI)
 - A WhatsApp account dedicated to the bot
 
 ---
@@ -196,7 +196,7 @@ src/
 ├── admin/                    # Express admin panel (routes, views, public assets)
 ├── services/
 │   ├── auth.js               # Authorization & user management
-│   └── tts.js                # Text-to-speech (Gemini dev & Vertex)
+│   └── tts.js                # Text-to-speech (Gemini TTS)
 └── cli/                      # Operational CLI scripts
 ```
 
@@ -209,7 +209,7 @@ Data is stored in SQLite (`data/database.sqlite`) with WAL mode for concurrency.
 See `.env.example` for a full list with descriptions.
 
 **Required:**
-- `GEMINI_API_KEY` — Google Gemini API key
+- `GEMINI_API_KEY` — Google Gemini API key (or use a service account below)
 
 **Important optional:**
 - `BOT_NAME` — Display name of the bot (default: `Wisp`)
@@ -218,9 +218,10 @@ See `.env.example` for a full list with descriptions.
 - `ADMIN_SESSION_SECRET` — Secret for session signing (auto-generated if not set)
 - `ADMIN_HOST` — Bind address (default: `127.0.0.1`, set to `0.0.0.0` for remote access)
 - `ADMIN_PORT` — Admin panel port (default: `3000`)
-- `TTS_PROVIDER` — `dev` (Gemini API, default) or `vertex` (Google Cloud)
-- `GOOGLE_SERVICE_ACCOUNT_JSON` — JSON string for Google Cloud Vertex TTS
-- `GOOGLE_SERVICE_ACCOUNT_FILE` — Path to a service account key file (alternative to `GOOGLE_SERVICE_ACCOUNT_JSON`)
+- `GOOGLE_SERVICE_ACCOUNT_FILE` — Path to a Google Cloud service account key file; when set, all Gemini calls (chat, memories, active listening, TTS) go through Vertex AI
+- `GOOGLE_SERVICE_ACCOUNT_JSON` — The service account key as a JSON string (alternative to the file)
+- `VERTEX_REGION` — Vertex AI location for service account calls (default: `global`)
+- `GEMINI_AUTH` — Force `api_key` or `service_account` (default: service account if configured, otherwise API key)
 
 ---
 

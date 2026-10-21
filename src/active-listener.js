@@ -191,24 +191,22 @@ class ActiveListener {
 
             const genAI = getGenAI();
             if (!genAI) {
-                logger.warn('ActiveListener', 'Gemini API key not configured yet, skipping active listening');
+                logger.warn('ActiveListener', 'Gemini credentials not configured yet, skipping active listening');
                 return;
             }
 
             for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
                 try {
-                    const model = genAI.getGenerativeModel({
+                    const response = await genAI.models.generateContent({
                         model: modelName,
-                        systemInstruction: systemPrompt,
-                        generationConfig: {
+                        contents: [{ role: 'user', parts: msgParts }],
+                        config: {
+                            systemInstruction: systemPrompt,
                             maxOutputTokens: 2048,
                             temperature: 0.1
                         }
                     });
-                    const result = await model.generateContent(msgParts);
-
-                    const response = result.response;
-                    const responseText = response.text().trim();
+                    const responseText = (response.text || '').trim();
 
                     // Track token usage
                     const usage = response.usageMetadata || {};

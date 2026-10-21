@@ -1,3 +1,4 @@
+const { hasGeminiCredentials } = require('../ai/credentials');
 const express = require('express');
 const session = require('express-session');
 const crypto = require('crypto');
@@ -139,7 +140,7 @@ async function startAdminServer(config, sharedState) {
         try {
             const setupComplete = await getBotSetting('setup_complete');
             const botName = await getBotSetting('bot_name');
-            if (setupComplete !== '1' && process.env.GEMINI_API_KEY && process.env.ADMIN_PASSWORD && botName) {
+            if (setupComplete !== '1' && hasGeminiCredentials() && process.env.ADMIN_PASSWORD && botName) {
                 await setBotSetting('setup_complete', '1');
                 logger.info('Admin', 'Existing installation detected — auto-marked setup as complete.');
                 // Start the WhatsApp connection since the bot.js auto-start
@@ -165,10 +166,10 @@ async function startAdminServer(config, sharedState) {
         try {
             const setupComplete = await getBotSetting('setup_complete');
             // Redirect to wizard if setup flag is missing OR essential credentials are gone
-            const needsSetup = setupComplete !== '1' || !process.env.GEMINI_API_KEY || !process.env.ADMIN_PASSWORD;
+            const needsSetup = setupComplete !== '1' || !hasGeminiCredentials() || !process.env.ADMIN_PASSWORD;
             if (needsSetup) {
                 // Reset the flag so the wizard can run again
-                if (setupComplete === '1' && (!process.env.GEMINI_API_KEY || !process.env.ADMIN_PASSWORD)) {
+                if (setupComplete === '1' && (!hasGeminiCredentials() || !process.env.ADMIN_PASSWORD)) {
                     await setBotSetting('setup_complete', '0');
                     logger.warn('Admin', 'Credentials missing — resetting setup state so wizard can run again.');
                 }
@@ -249,7 +250,7 @@ async function startAdminServer(config, sharedState) {
         let needsSetup = false;
         try {
             const setupComplete = await getBotSetting('setup_complete');
-            needsSetup = setupComplete !== '1' || !process.env.GEMINI_API_KEY || !process.env.ADMIN_PASSWORD;
+            needsSetup = setupComplete !== '1' || !hasGeminiCredentials() || !process.env.ADMIN_PASSWORD;
         } catch { needsSetup = true; }
 
         const title = needsSetup

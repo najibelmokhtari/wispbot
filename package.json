@@ -8,11 +8,17 @@
     "start:silent": "node src/bot.js --no-browser",
     "test": "node --test test/*.test.js"
   },
-  "keywords": ["whatsapp", "chatbot", "gemini", "ai", "baileys"],
+  "keywords": [
+    "whatsapp",
+    "chatbot",
+    "gemini",
+    "ai",
+    "baileys"
+  ],
   "author": "Najib El Mokhtari",
   "license": "MIT",
   "dependencies": {
-    "@google/generative-ai": "^0.24.1",
+    "@google/genai": "^2.30.0",
     "@whiskeysockets/baileys": "^6.7.21",
     "audio-decode": "^2.2.3",
     "axios": "^1.11.0",

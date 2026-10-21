@@ -56,18 +56,17 @@ async function memoriesHandler(groupId, messages, ctx) {
 
     // Call LLM
     try {
-        const model = genAI.getGenerativeModel({ model: modelName });
-        const chat = model.startChat({
+        const chat = genAI.chats.create({
+            model: modelName,
             history: [
                 { role: 'user', parts: [{ text: systemPrompt }] },
                 { role: 'model', parts: [{ text: 'Understood. I will maintain the group memories document as instructed.' }] }
             ],
-            generationConfig: { maxOutputTokens: 8000 }
+            config: { maxOutputTokens: 8000 }
         });
 
-        const result = await chat.sendMessage([{ text: userMessage }]);
-        const response = result.response;
-        const updatedMemories = response.text();
+        const response = await chat.sendMessage({ message: [{ text: userMessage }] });
+        const updatedMemories = response.text;
 
         if (!updatedMemories || updatedMemories.trim().length === 0) {
             logger.warn('Memories', `Empty response from LLM for ${groupId}, skipping write`);

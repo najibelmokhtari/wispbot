@@ -1,4 +1,3 @@
-const axios = require('axios');
 const { calculateTTSCost } = require('../pricing-config');
 const { exec } = require('child_process');
 const { promisify } = require('util');
@@ -7,6 +6,7 @@ const path = require('path');
 const os = require('os');
 const logger = require('../logger');
 const config = require('../config');
+const { getGenAI } = require('../ai/gemini');
 
 const execAsync = promisify(exec);
 
@@ -28,102 +28,17 @@ async function checkFfmpeg() {
 
 // Constants
 const DEFAULT_SAMPLE_RATE_HERTZ = 24000;
-const DEV_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/models";
 
 class TTSService {
     constructor() {
-        this.provider = config.ttsProvider; // 'dev' or 'vertex'
         this.modelName = config.ttsModel;
         this.defaultVoice = { name: 'Kore' };
 
-        if (this.provider === 'vertex') {
-            this._initVertex();
-        } else {
-            this._initDev();
-        }
+        // Uses the shared Gemini client, so TTS follows the same auth (API key or service account)
+        logger.info('TTS', `Initialized TTS (model: ${this.modelName})`);
 
         // Check ffmpeg availability at startup (non-blocking)
         checkFfmpeg();
-    }
-
-    _initDev() {
-        this.apiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
-        if (!this.apiKey) {
-            logger.error('TTS', "No API Key found for TTS (dev mode). Set GEMINI_API_KEY.");
-        }
-        logger.info('TTS', `Initialized TTS with dev API (model: ${this.modelName})`);
-    }
-
-    _initVertex() {
-        this._serviceAccount = null;
-        this._accessToken = null;
-        this._tokenExpiry = 0;
-
-        let rawJson = config.googleServiceAccountJson;
-        if (!rawJson && config.googleServiceAccountFile) {
-            try {
-                rawJson = require('fs').readFileSync(config.googleServiceAccountFile, 'utf8');
-            } catch (err) {
-                logger.error('TTS', `Failed to read GOOGLE_SERVICE_ACCOUNT_FILE (${config.googleServiceAccountFile}): ${err.message}`);
-                return;
-            }
-        }
-
-        if (!rawJson) {
-            logger.error('TTS', "No service account found. Set GOOGLE_SERVICE_ACCOUNT_JSON or GOOGLE_SERVICE_ACCOUNT_FILE for Vertex AI TTS.");
-            return;
-        }
-
-        try {
-            this._serviceAccount = JSON.parse(rawJson);
-            this._projectId = this._serviceAccount.project_id;
-            this._region = config.vertexRegion;
-            logger.info('TTS', `Initialized TTS with Vertex AI (project: ${this._projectId}, region: ${this._region}, model: ${this.modelName})`);
-        } catch (err) {
-            logger.error('TTS', 'Failed to parse GOOGLE_SERVICE_ACCOUNT_JSON: ' + err.message);
-        }
-    }
-
-    /**
-     * Get an OAuth2 access token from the service account for Vertex AI.
-     */
-    async _getVertexAccessToken() {
-        // Return cached token if still valid (with 60s buffer)
-        if (this._accessToken && Date.now() < this._tokenExpiry - 60000) {
-            return this._accessToken;
-        }
-
-        const crypto = require('crypto');
-        const sa = this._serviceAccount;
-
-        // Build JWT
-        const now = Math.floor(Date.now() / 1000);
-        const header = Buffer.from(JSON.stringify({ alg: 'RS256', typ: 'JWT' })).toString('base64url');
-        const payload = Buffer.from(JSON.stringify({
-            iss: sa.client_email,
-            scope: 'https://www.googleapis.com/auth/cloud-platform',
-            aud: sa.token_uri || 'https://oauth2.googleapis.com/token',
-            iat: now,
-            exp: now + 3600
-        })).toString('base64url');
-
-        const signInput = `${header}.${payload}`;
-        const sign = crypto.createSign('RSA-SHA256');
-        sign.update(signInput);
-        const signature = sign.sign(sa.private_key, 'base64url');
-        const jwt = `${signInput}.${signature}`;
-
-        // Exchange JWT for access token
-        const resp = await axios.post(sa.token_uri || 'https://oauth2.googleapis.com/token', new URLSearchParams({
-            grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer',
-            assertion: jwt
-        }).toString(), {
-            headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
-        });
-
-        this._accessToken = resp.data.access_token;
-        this._tokenExpiry = Date.now() + (resp.data.expires_in * 1000);
-        return this._accessToken;
     }
 
     /**
@@ -178,63 +93,7 @@ class TTSService {
     }
 
     /**
-     * Build the Gemini TTS request payload (same structure for both providers).
-     */
-    _buildPayload(contentInput, voiceName) {
-        return {
-            contents: [{
-                role: "user",
-                parts: [{ text: contentInput }]
-            }],
-            generationConfig: {
-                responseModalities: ["AUDIO"],
-                speechConfig: {
-                    voiceConfig: {
-                        prebuiltVoiceConfig: {
-                            voiceName: voiceName
-                        }
-                    }
-                }
-            }
-        };
-    }
-
-    /**
-     * Call the Dev (Generative Language) API.
-     */
-    async _callDevApi(payload) {
-        if (!this.apiKey) {
-            throw new Error("TTS Service: GEMINI_API_KEY is missing.");
-        }
-        const url = `${DEV_BASE_URL}/${this.modelName}:generateContent?key=${this.apiKey}`;
-        return axios.post(url, payload, {
-            headers: { 'Content-Type': 'application/json' },
-            timeout: 90000
-        });
-    }
-
-    /**
-     * Call the Vertex AI API.
-     */
-    async _callVertexApi(payload) {
-        if (!this._serviceAccount) {
-            throw new Error("TTS Service: Service account not configured for Vertex AI.");
-        }
-        const token = await this._getVertexAccessToken();
-        // The 'global' location has no regional prefix on the hostname
-        const host = this._region === 'global' ? 'aiplatform.googleapis.com' : `${this._region}-aiplatform.googleapis.com`;
-        const url = `https://${host}/v1/projects/${this._projectId}/locations/${this._region}/publishers/google/models/${this.modelName}:generateContent`;
-        return axios.post(url, payload, {
-            headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${token}`
-            },
-            timeout: 90000
-        });
-    }
-
-    /**
-     * Generates audio from text using either Dev or Vertex AI API.
+     * Generates audio from text using the shared Gemini client.
      */
     async generateAudio(text, options = {}) {
         const stylePrompt = options.stylePrompt;
@@ -245,19 +104,27 @@ class TTSService {
             contentInput = `${stylePrompt}: ${text}`;
         }
 
-        const payload = this._buildPayload(contentInput, voiceName);
+        const genAI = getGenAI();
+        if (!genAI) {
+            throw new Error('TTS Service: Gemini credentials not configured.');
+        }
 
         try {
-            const response = this.provider === 'vertex'
-                ? await this._callVertexApi(payload)
-                : await this._callDevApi(payload);
-
-            if (response.status !== 200) {
-                throw new Error(`TTS API Error: ${response.status} ${response.statusText}`);
-            }
+            const response = await genAI.models.generateContent({
+                model: this.modelName,
+                contents: [{ role: 'user', parts: [{ text: contentInput }] }],
+                config: {
+                    responseModalities: ['AUDIO'],
+                    speechConfig: {
+                        voiceConfig: {
+                            prebuiltVoiceConfig: { voiceName: voiceName }
+                        }
+                    }
+                }
+            });
 
             // Extract inline audio data
-            const candidate = response.data.candidates && response.data.candidates[0];
+            const candidate = response.candidates && response.candidates[0];
             const part = candidate && candidate.content && candidate.content.parts && candidate.content.parts[0];
 
             if (!part || !part.inlineData || !part.inlineData.data) {
@@ -285,7 +152,7 @@ class TTSService {
             };
 
         } catch (error) {
-            logger.error('TTS', `Error generating TTS (${this.provider}): ` + (error.response ? JSON.stringify(error.response.data, null, 2) : error.message));
+            logger.error('TTS', 'Error generating TTS: ' + error.message);
             throw error;
         }
     }

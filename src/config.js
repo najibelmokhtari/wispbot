@@ -3,12 +3,12 @@ const crypto = require('crypto');
 const logger = require('./logger');
 
 // --- Required env vars ---
-const REQUIRED_ENV = ['GEMINI_API_KEY'];
+// Gemini needs either an API key or a service account (inline JSON or key file)
+const GEMINI_CREDENTIAL_ENV = ['GEMINI_API_KEY', 'GOOGLE_SERVICE_ACCOUNT_JSON', 'GOOGLE_SERVICE_ACCOUNT_FILE'];
 
 function validateEnv() {
-    const missing = REQUIRED_ENV.filter(key => !process.env[key]);
-    if (missing.length > 0) {
-        logger.warn('Config', `Missing environment variables: ${missing.join(', ')} — setup wizard will guide you through configuration.`);
+    if (!GEMINI_CREDENTIAL_ENV.some(key => process.env[key])) {
+        logger.warn('Config', 'Missing Gemini credentials: set GEMINI_API_KEY or GOOGLE_SERVICE_ACCOUNT_FILE — setup wizard will guide you through configuration.');
     }
 }
 
@@ -39,13 +39,15 @@ const config = {
 
     // TTS
     ttsTrigger: process.env.TTS_TRIGGER || '$audio',
-    ttsProvider: process.env.TTS_PROVIDER || 'dev',       // 'dev' (Gemini API key) or 'vertex' (service account)
     ttsModel: process.env.TTS_MODEL || 'gemini-3.8-flash-tts',
 
-    // Vertex AI (only needed when TTS_PROVIDER=vertex)
+    // Vertex AI service account (used for all Gemini calls when configured, see GEMINI_AUTH)
     googleServiceAccountJson: process.env.GOOGLE_SERVICE_ACCOUNT_JSON || '',
     googleServiceAccountFile: process.env.GOOGLE_SERVICE_ACCOUNT_FILE || '',  // Path to a key file; used when the JSON var is empty
-    vertexRegion: process.env.VERTEX_REGION || 'us-central1',
+    vertexRegion: process.env.VERTEX_REGION || 'global',
+
+    // Gemini auth: 'api_key' or 'service_account'; empty = service account if configured, else API key
+    geminiAuth: process.env.GEMINI_AUTH || '',
 
     // Directories
     dataDirectory: process.env.DATA_DIRECTORY || 'data',

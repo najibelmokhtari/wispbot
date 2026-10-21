@@ -1,3 +1,4 @@
+const { hasGeminiCredentials } = require('../../ai/credentials');
 const express = require('express');
 const router = express.Router();
 const fs = require('fs');
@@ -249,7 +250,7 @@ router.post('/api/setup/ensure-connection', requireSetupIncomplete, async (req, 
     try {
         const botModule = require('../../bot');
         const state = botModule.getConnectionState();
-        if (state.status === 'waiting' && process.env.GEMINI_API_KEY) {
+        if (state.status === 'waiting' && hasGeminiCredentials()) {
             logger.info('Setup', 'Starting WhatsApp connection (wizard resume)...');
             botModule.startSocket();
         }
@@ -263,7 +264,7 @@ router.post('/api/setup/ensure-connection', requireSetupIncomplete, async (req, 
 // --- API: wizard progress (so it can resume where the user left off) ---
 router.get('/api/setup/progress', requireSetupIncomplete, async (req, res) => {
     try {
-        const hasApiKey = !!process.env.GEMINI_API_KEY;
+        const hasApiKey = hasGeminiCredentials();
         const hasPassword = !!process.env.ADMIN_PASSWORD;
         const botName = await getBotSetting('bot_name');
         const persona = await getBotSetting('default_persona');

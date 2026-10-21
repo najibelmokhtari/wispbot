@@ -1,44 +1,58 @@
 const { prepareMessagesForClaude, replacePhoneNumbersWithUsernames } = require('../phone-number-replacer');
 const { processMessageHistory } = require('../message-processor');
-const { GoogleGenerativeAI } = require('@google/generative-ai');
+const { GoogleGenAI } = require('@google/genai');
 const { calculateCost } = require('../pricing-config');
+const { loadServiceAccount, getAuthMode } = require('./credentials');
+const appConfig = require('../config');
 const fs = require('fs').promises;
 const path = require('path');
 const logger = require('../logger');
 
 require('dotenv').config();
 
-let GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 const MAX_RETRIES = 3;
 const RETRY_DELAY = 1000; // 1 second
 
-// Initialize the Google Generative AI client
+// Shared Google GenAI client — authenticated with either a service account (Vertex AI) or an API key
 let genAI = null;
 
-function initializeGemini(apiKey) {
-    if (!apiKey) {
-        logger.warn('Gemini', 'GEMINI_API_KEY is missing — bot will not respond until configured via setup wizard.');
+function initializeGemini() {
+    const mode = getAuthMode();
+    if (mode === 'service_account') {
+        const sa = loadServiceAccount();
+        genAI = new GoogleGenAI({
+            vertexai: true,
+            project: sa.project_id,
+            location: appConfig.vertexRegion,
+            googleAuthOptions: {
+                credentials: sa,
+                scopes: ['https://www.googleapis.com/auth/cloud-platform']
+            }
+        });
+        logger.info('Gemini', `Using service account ${sa.client_email} (Vertex AI, project: ${sa.project_id}, location: ${appConfig.vertexRegion})`);
+    } else if (mode === 'api_key') {
+        const apiKey = process.env.GEMINI_API_KEY;
+        genAI = new GoogleGenAI({ apiKey });
+        logger.info('Gemini', `Using Gemini API key (key suffix: ${apiKey.slice(-4)})`);
+    } else {
+        logger.warn('Gemini', 'No Gemini credentials configured — bot will not respond until configured via setup wizard.');
         genAI = null;
-        return;
     }
-    logger.debug('Gemini', `Initializing Gemini client (key suffix: ${apiKey.slice(-4)})`);
-    GEMINI_API_KEY = apiKey;
-    process.env.GEMINI_API_KEY = apiKey;
-    genAI = new GoogleGenerativeAI(apiKey);
 }
 
-// Re-initialize with a new key (called from setup wizard)
+// Re-initialize with a new API key (called from setup wizard)
 function reinitializeGemini(newKey) {
-    initializeGemini(newKey);
-    logger.info('Gemini', 'Gemini client re-initialized with new API key.');
+    process.env.GEMINI_API_KEY = newKey;
+    initializeGemini();
+    logger.info('Gemini', 'Gemini client re-initialized.');
 }
 
 // Initial setup
-initializeGemini(GEMINI_API_KEY);
+initializeGemini();
 
 async function callGeminiAPI(context, config, systemPrompt) {
     if (!genAI) {
-        throw new Error('Gemini API key not configured. Complete the setup wizard first.');
+        throw new Error('Gemini credentials not configured. Set GEMINI_API_KEY or GOOGLE_SERVICE_ACCOUNT_FILE.');
     }
     const userPrefixPrompt = await readPromptFile(path.join('prompts', 'system', 'user_prefix_prompt.txt'));
 
@@ -69,14 +83,11 @@ async function callGeminiAPI(context, config, systemPrompt) {
     }
 
     const modelName = config.aiModel || "gemini-2.5-flash";
-    const model = genAI.getGenerativeModel({
+    const chat = genAI.chats.create({
         model: modelName,
-        tools: tools
-    });
-
-    const chat = model.startChat({
         history: history,
-        generationConfig: {
+        config: {
+            tools: tools,
             maxOutputTokens: 16000,
         }
     });
@@ -277,10 +288,9 @@ async function callGeminiAPI(context, config, systemPrompt) {
 
     for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
         try {
-            const result = await chat.sendMessage(msgParts);
-            const response = await result.response;
+            const response = await chat.sendMessage({ message: msgParts });
             logger.debug('Gemini', 'Gemini API Response Object: ' + JSON.stringify(response, null, 2));
-            const text = response.text();
+            const text = response.text;
 
             // Extract usage metadata directly from the response
             const usage = response.usageMetadata || {};

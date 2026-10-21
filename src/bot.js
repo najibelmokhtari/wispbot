@@ -1,4 +1,5 @@
 // --- Baileys WhatsApp Bot ---
+const { hasGeminiCredentials } = require('./ai/credentials');
 const { default: makeWASocket, DisconnectReason, useMultiFileAuthState, downloadMediaMessage, getContentType, jidNormalizedUser, fetchLatestBaileysVersion } = require('@whiskeysockets/baileys');
 const pino = require('pino');
 const QRCode = require('qrcode');
@@ -1314,7 +1315,7 @@ process.on('unhandledRejection', (reason, promise) => {
 (async () => {
     try {
         const setupComplete = await getBotSetting('setup_complete');
-        if (setupComplete === '1' && process.env.GEMINI_API_KEY) {
+        if (setupComplete === '1' && hasGeminiCredentials()) {
             logger.info('Bot', 'Starting Baileys WhatsApp client...');
             startSocket();
         } else {
@@ -1323,7 +1324,7 @@ process.on('unhandledRejection', (reason, promise) => {
     } catch (err) {
         logger.error('Bot', 'Error checking setup state: ' + err.message);
         // Fall back to starting if we can't check
-        if (process.env.GEMINI_API_KEY) startSocket();
+        if (hasGeminiCredentials()) startSocket();
     }
 })();
 

@@ -133,7 +133,7 @@ class BackgroundProcessor {
 
             const genAI = getGenAI();
             if (!genAI) {
-                logger.warn('Background', 'Gemini API key not configured yet, skipping background processing');
+                logger.warn('Background', 'Gemini credentials not configured yet, skipping background processing');
                 return;
             }
 
