@@ -38,6 +38,7 @@ class PromptManager {
         this.prompts = new Map();
         this.ttsStylePrompts = new Map();
         this.ttsVoices = new Map();
+        this.ttsAutoInstructions = new Map();
         this.baseInstructions = '';
     }
 
@@ -62,6 +63,7 @@ class PromptManager {
                 if (persona.systemPrompt) this.prompts.set(name, persona.systemPrompt);
                 if (persona.voice) this.ttsVoices.set(name, persona.voice);
                 if (persona.ttsStyle) this.ttsStylePrompts.set(name, persona.ttsStyle);
+                if (persona.ttsAutoInstructions) this.ttsAutoInstructions.set(name, persona.ttsAutoInstructions);
             }
         } catch (error) {
             logger.error('Queue', 'Error loading prompts: ' + error.message);
@@ -70,6 +72,10 @@ class PromptManager {
 
     getTtsStylePrompt(promptName) {
         return this.ttsStylePrompts.get(promptName) || null;
+    }
+
+    getTtsAutoInstructions(promptName) {
+        return this.ttsAutoInstructions.get(promptName) || null;
     }
 
     getTtsVoice(promptName) {
@@ -108,6 +114,8 @@ class PromptManager {
             else this.ttsVoices.delete(promptName);
             if (persona.ttsStyle) this.ttsStylePrompts.set(promptName, persona.ttsStyle);
             else this.ttsStylePrompts.delete(promptName);
+            if (persona.ttsAutoInstructions) this.ttsAutoInstructions.set(promptName, persona.ttsAutoInstructions);
+            else this.ttsAutoInstructions.delete(promptName);
             return true;
         } catch (error) {
             logger.error('Queue', `Error reloading prompt ${promptName}: ${error.message}`);
@@ -235,6 +243,32 @@ class MessageQueueManager {
     // ------------------------------------
 
     /**
+     * Builds the 'auto' TTS mode instruction: the template from
+     * tts_auto_instruction.txt with the persona's and the group's voice reply
+     * instructions concatenated in.
+     */
+    async buildTtsAutoInstruction(promptName, groupInfo) {
+        let template;
+        try {
+            template = await fs.readFile(path.join(__dirname, '..', 'prompts', 'system', 'tts_auto_instruction.txt'), 'utf-8');
+        } catch (err) {
+            logger.warn('TTS', 'Could not load tts_auto_instruction.txt, using a minimal fallback');
+            template = 'You may reply with text or with a voice note. Only reply with a [VOICE_SCRIPT] block when a voice note fits better.\n\n{AUTO_INSTRUCTIONS}';
+        }
+
+        const personaInstructions = this.promptManager.getTtsAutoInstructions(promptName)
+            || this.promptManager.getTtsAutoInstructions('default');
+        const groupInstructions = (groupInfo.tts_auto_instructions || '').trim();
+
+        const sections = [];
+        if (personaInstructions) sections.push(`Persona instructions:\n${personaInstructions}`);
+        if (groupInstructions) sections.push(`Group chat instructions (take precedence over persona instructions):\n${groupInstructions}`);
+        const combined = sections.length > 0 ? sections.join('\n\n') : '(No specific instructions — use your judgment.)';
+
+        return template.replace('{AUTO_INSTRUCTIONS}', combined);
+    }
+
+    /**
      * Parses an LLM audio reply (voice script) into plain text and TTS segments.
      * Returns { content, segments } — content is plain text for history and the text fallback.
      */
@@ -296,20 +330,25 @@ class MessageQueueManager {
                 const ttsTrigger = (await getBotSetting('tts_trigger')) || this.config.ttsTrigger;
                 const ttsEnabled = groupInfo.tts_enabled === 1;
                 const ttsTriggerMode = groupInfo.tts_trigger_mode || (await getBotSetting('default_tts_trigger_mode')) || 'tag';
-                let requestsTTS = false;
-                if (message.skipTTS) {
+                let requestsTTS = false;   // Reply will be audio
+                let ttsAutoDecide = false; // 'auto' mode: the LLM chooses between text and audio
+                if (message.skipTTS && ttsTriggerMode !== 'auto') {
                     // Active listener explicitly decided no TTS for this message
+                    // (in 'auto' mode the main LLM makes that call instead)
                     requestsTTS = false;
                 } else if (ttsEnabled) {
                     if (ttsTriggerMode === 'always') {
                         requestsTTS = true;
-                    } else {
-                        requestsTTS = message.body.includes(ttsTrigger);
+                    } else if (message.body.includes(ttsTrigger)) {
+                        // An explicit tag always gets audio, in 'auto' mode too
+                        requestsTTS = true;
+                    } else if (ttsTriggerMode === 'auto') {
+                        ttsAutoDecide = true;
                     }
                 }
 
                 // Strip the TTS trigger from the message so the LLM doesn't see it
-                if (requestsTTS && ttsTriggerMode === 'tag') {
+                if (requestsTTS && ttsTriggerMode !== 'always') {
                     message.body = message.body.replace(ttsTrigger, '').trim();
                 }
 
@@ -327,7 +366,7 @@ class MessageQueueManager {
                 }
 
                 // Inject TTS-specific instructions for the LLM if applicable
-                if (requestsTTS && ttsEnabled) {
+                if ((requestsTTS || ttsAutoDecide) && ttsEnabled) {
                     try {
                         // Load both the TTS instruction template and the default style prompt
                         let ttsLlmInstruction = await fs.readFile(path.join(__dirname, '..', 'prompts', 'system', 'tts_system_instruction.txt'), 'utf-8');
@@ -346,6 +385,10 @@ class MessageQueueManager {
                         systemPrompt += `\n\n${ttsLlmInstruction}`;
                     } catch (err) {
                         logger.warn('TTS', 'Could not load tts_system_instruction.txt, proceeding without it');
+                    }
+
+                    if (ttsAutoDecide) {
+                        systemPrompt += `\n\n${await this.buildTtsAutoInstruction(promptName, groupInfo)}`;
                     }
                 }
 
@@ -385,6 +428,12 @@ class MessageQueueManager {
                         );
                     }
                     continue;
+                }
+
+                // 'auto' mode: a [VOICE_SCRIPT] block means the LLM chose a voice reply
+                if (ttsAutoDecide) {
+                    requestsTTS = /\[VOICE_SCRIPT\]/i.test(aiResponse);
+                    logger.info('TTS', `LLM chose a ${requestsTTS ? 'voice' : 'text'} reply for ${groupId} (auto mode)`);
                 }
 
                 // Parse TTS response if this is a TTS request

@@ -76,3 +76,26 @@ describe('serializePersona', () => {
         assert.ok(serialized.includes('[system_prompt]'));
     });
 });
+
+describe('voice reply instructions ([tts_auto])', () => {
+    const WITH_AUTO = SAMPLE_PERSONA + '\n[tts_auto]\nSend voice notes for jokes.\nNever for facts.\n';
+
+    it('parses the [tts_auto] section', () => {
+        const result = parsePersonaFile(WITH_AUTO);
+        assert.equal(result.ttsAutoInstructions, 'Send voice notes for jokes.\nNever for facts.');
+        assert.ok(result.ttsStyle.includes('flat, monotone'));
+    });
+
+    it('defaults to an empty string when absent', () => {
+        assert.equal(parsePersonaFile(SAMPLE_PERSONA).ttsAutoInstructions, '');
+    });
+
+    it('round-trips through serializePersona', () => {
+        const parsed = parsePersonaFile(WITH_AUTO);
+        assert.equal(parsePersonaFile(serializePersona(parsed)).ttsAutoInstructions, parsed.ttsAutoInstructions);
+    });
+
+    it('omits the section when empty', () => {
+        assert.ok(!serializePersona(parsePersonaFile(SAMPLE_PERSONA)).includes('[tts_auto]'));
+    });
+});

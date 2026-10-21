@@ -62,6 +62,8 @@ function hasUnsavedChanges() {
     if (btnPrompt && !btnPrompt.disabled) return true;
     const btnStyle = document.getElementById('btn-save-tts-style');
     if (btnStyle && !btnStyle.disabled) return true;
+    const btnTtsAuto = document.getElementById('btn-save-tts-auto-persona');
+    if (btnTtsAuto && !btnTtsAuto.disabled) return true;
     return false;
 }
 
@@ -379,6 +381,29 @@ async function saveGroupActiveListeningPrompt(groupId) {
     }
 }
 
+// Save group voice reply instructions ('auto' TTS trigger mode)
+async function saveGroupTtsAutoInstructions(groupId) {
+    const content = document.getElementById('tts-auto-editor').value;
+    try {
+        const res = await fetch(`${BASE}/api/groups/${encodeURIComponent(groupId)}/settings`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ tts_auto_instructions: content || null })
+        });
+        if (!res.ok) throw new Error('Failed');
+        showToast(content ? 'Voice reply instructions saved' : 'Voice reply instructions cleared', 'success');
+        markClean('tts-auto-editor');
+    } catch (e) {
+        showToast('Failed to save voice reply instructions', 'error');
+    }
+}
+
+// Show the voice reply instructions only in 'auto' trigger mode
+function toggleGroupTtsAutoSection(mode) {
+    const section = document.getElementById('tts-auto-instructions-section');
+    if (section) section.style.display = mode === 'auto' ? '' : 'none';
+}
+
 // Save group active listening audio count
 async function saveGroupAlAudioCount(groupId) {
     const val = document.getElementById('al-audio-count-input').value.trim();
@@ -637,7 +662,7 @@ async function saveBotName() {
 function toggleTtsTriggerTag() {
     const mode = document.getElementById('default-tts-trigger-mode').value;
     const container = document.getElementById('tts-trigger-tag-container');
-    if (container) container.style.display = mode === 'tag' ? '' : 'none';
+    if (container) container.style.display = mode === 'always' ? 'none' : '';
 }
 
 async function saveTtsTrigger() {
@@ -792,6 +817,9 @@ function markPersonaDirty(field) {
     } else if (field === 'ttsStyle') {
         const btn = document.getElementById('btn-save-tts-style');
         if (btn) btn.disabled = false;
+    } else if (field === 'ttsAuto') {
+        const btn = document.getElementById('btn-save-tts-auto-persona');
+        if (btn) btn.disabled = false;
     } else if (field === 'description') {
         const btn = document.getElementById('btn-save-persona-description');
         if (btn) btn.disabled = false;
@@ -803,6 +831,8 @@ function resetPersonaDirty() {
     const btnPrompt = document.getElementById('btn-save-persona-prompt');
     const btnStyle = document.getElementById('btn-save-tts-style');
     const btnDesc = document.getElementById('btn-save-persona-description');
+    const btnTtsAuto = document.getElementById('btn-save-tts-auto-persona');
+    if (btnTtsAuto) btnTtsAuto.disabled = true;
     if (btnPrompt) btnPrompt.disabled = true;
     if (btnStyle) btnStyle.disabled = true;
     if (btnDesc) btnDesc.disabled = true;
@@ -844,6 +874,10 @@ async function selectPersona(name) {
         ? 'Instructions for how this persona should speak (tone, accent, mannerisms). This is the fallback style for personas without a custom TTS prompt.'
         : 'Instructions for how this persona should speak (tone, accent, mannerisms). Leave empty to use the default style.';
 
+    document.getElementById('persona-tts-auto-desc').innerHTML = isDefault
+        ? 'When this persona should answer with a voice note in groups using the "Let AI decide" trigger mode. Used for personas without their own instructions; each group can add its own on top.'
+        : 'When this persona should answer with a voice note in groups using the "Let AI decide" trigger mode. Each group can add its own instructions on top. Leave empty to use the default persona\'s instructions.';
+
     // Show/hide the "Use Default" option in voice select
     document.getElementById('persona-tts-voice-default-opt').style.display = isDefault ? 'none' : '';
 
@@ -851,10 +885,12 @@ async function selectPersona(name) {
     const contentEditor = document.getElementById('persona-content-editor');
     const voiceSelect = document.getElementById('persona-tts-voice-select');
     const styleEditor = document.getElementById('persona-tts-style-editor');
+    const autoEditor = document.getElementById('persona-tts-auto-editor');
 
     // Reset
     if (contentEditor) { contentEditor.value = ''; contentEditor.placeholder = 'Loading...'; }
     if (styleEditor) { styleEditor.value = ''; styleEditor.placeholder = 'Loading...'; }
+    if (autoEditor) { autoEditor.value = ''; autoEditor.placeholder = 'Loading...'; }
     if (voiceSelect) voiceSelect.value = '';
 
     // Hide community notice by default
@@ -894,8 +930,10 @@ async function selectPersona(name) {
         const data = await res.json();
         if (voiceSelect) voiceSelect.value = data.voice || '';
         if (styleEditor) { styleEditor.value = data.stylePrompt || ''; styleEditor.placeholder = 'Enter TTS style instructions...'; }
+        if (autoEditor) { autoEditor.value = data.autoInstructions || ''; autoEditor.placeholder = 'e.g. Send a voice note for jokes, roasts and storytelling; use text for anything factual.'; }
     } catch (e) {
         if (styleEditor) styleEditor.value = 'Failed to load TTS style prompt.';
+        if (autoEditor) autoEditor.value = 'Failed to load voice reply instructions.';
     }
 
     // Reset dirty state after loading
@@ -1032,6 +1070,27 @@ async function savePersonaTtsStyle() {
         refreshCommunityStatus();
     } catch (e) {
         showToast('Failed to save TTS style prompt', 'error');
+    }
+}
+
+// Save persona voice reply instructions ('auto' TTS trigger mode)
+async function savePersonaTtsAuto() {
+    if (!currentPersona) return;
+    const textarea = document.getElementById('persona-tts-auto-editor');
+    if (!textarea) return;
+    try {
+        const res = await fetch(`${BASE}/api/personas/${encodeURIComponent(currentPersona)}/tts/auto`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ content: textarea.value })
+        });
+        if (!res.ok) throw new Error('Failed');
+        showToast('Voice reply instructions saved', 'success');
+        const btn = document.getElementById('btn-save-tts-auto-persona');
+        if (btn) btn.disabled = true;
+        refreshCommunityStatus();
+    } catch (e) {
+        showToast('Failed to save voice reply instructions', 'error');
     }
 }
 

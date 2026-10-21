@@ -224,9 +224,16 @@ async function initializeDatabase(retries = MAX_RETRIES) {
       // Column likely exists, ignore error
     }
 
-    // Migration: Add TTS trigger mode column ('tag' or 'always')
+    // Migration: Add TTS trigger mode column ('tag', 'always' or 'auto')
     try {
       await db.exec("ALTER TABLE group_info ADD COLUMN tts_trigger_mode TEXT DEFAULT NULL");
+    } catch (error) {
+      // Column likely exists, ignore error
+    }
+
+    // Migration: Add per-group instructions for the 'auto' TTS trigger mode
+    try {
+      await db.exec("ALTER TABLE group_info ADD COLUMN tts_auto_instructions TEXT DEFAULT NULL");
     } catch (error) {
       // Column likely exists, ignore error
     }
@@ -409,7 +416,7 @@ const ALLOWED_GROUP_COLUMNS = new Set([
   'custom_message_limit', 'background_processing_enabled',
   'background_debounce_ms', 'background_message_threshold',
   'audio_history_mode', 'audio_history_count', 'audio_duration_cap',
-  'tts_trigger_mode', 'usage_reset_date',
+  'tts_trigger_mode', 'tts_auto_instructions', 'usage_reset_date',
   'active_listening_enabled', 'active_listening_throttle_ms',
   'active_listening_context_count', 'active_listening_prompt',
   'active_listening_send_audio', 'active_listening_send_images',

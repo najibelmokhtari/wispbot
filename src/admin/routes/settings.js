@@ -16,6 +16,7 @@ const SYSTEM_PROMPTS = [
     { file: 'user_prefix_prompt.txt', name: 'user_prefix_prompt', displayName: 'User Prefix Prompt', description: 'Prefixed to the user message in API calls.' },
     { file: 'mention_instruction.txt', name: 'mention_instruction', displayName: 'Mention Instruction', description: 'Injected when the group has @-taggable users.' },
     { file: 'tts_system_instruction.txt', name: 'tts_system_instruction', displayName: 'TTS System Instruction', description: 'Format instructions for audio output mode.' },
+    { file: 'tts_auto_instruction.txt', name: 'tts_auto_instruction', displayName: 'TTS Auto Mode Instruction', description: 'Tells the AI how to decide between a text and a voice reply in "Let AI decide" trigger mode.' },
     { file: 'background_memories_instruction.txt', name: 'background_memories_instruction', displayName: 'Memories: Extraction Prompt', description: 'System prompt for the background LLM that maintains group memories.' },
     { file: 'active_listening_instruction.txt', name: 'active_listening_instruction', displayName: 'Active Listening: Decision Prompt', description: 'System prompt for the fast LLM that decides whether the bot should respond.' },
 ];

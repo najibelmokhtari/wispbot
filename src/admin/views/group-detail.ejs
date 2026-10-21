@@ -144,11 +144,18 @@
         <small class="section-desc">Voice and style are configured per persona in <a href="<%= basePath %>/personas#persona-<%= group.default_prompt_name || 'default' %>">Settings</a>.</small>
         <div style="margin-top:0.5rem">
             <label for="select-tts-trigger-mode">Trigger Mode</label>
-            <small class="field-desc">How TTS is triggered for this group. "By Tag" means the user must include <code><%= ttsTrigger %></code> in their message.</small>
-            <select id="select-tts-trigger-mode" data-group="<%= group.group_id %>" onchange="updateDropdown(this, 'tts_trigger_mode')">
+            <small class="field-desc">How TTS is triggered for this group. "By Tag" means the user must include <code><%= ttsTrigger %></code> in their message. "Let AI decide" lets the AI choose between text and a voice note based on the conversation and the instructions below (<code><%= ttsTrigger %></code> still forces a voice note).</small>
+            <select id="select-tts-trigger-mode" data-group="<%= group.group_id %>" onchange="updateDropdown(this, 'tts_trigger_mode'); toggleGroupTtsAutoSection(this.value);">
                 <option value="tag" <%= (group.tts_trigger_mode || 'tag') === 'tag' ? 'selected' : '' %>>By Tag</option>
                 <option value="always" <%= (group.tts_trigger_mode || 'tag') === 'always' ? 'selected' : '' %>>Always</option>
+                <option value="auto" <%= (group.tts_trigger_mode || 'tag') === 'auto' ? 'selected' : '' %>>Let AI decide</option>
             </select>
+        </div>
+        <div id="tts-auto-instructions-section" style="margin-top:0.75rem;<%= (group.tts_trigger_mode || 'tag') === 'auto' ? '' : ' display:none;' %>">
+            <label for="tts-auto-editor">Voice Reply Instructions</label>
+            <small class="field-desc">When the AI should (or shouldn't) answer with a voice note in this group. Combined with the persona's voice reply instructions; these take precedence. Leave empty to rely on the persona and the AI's judgment.</small>
+            <textarea id="tts-auto-editor" class="context-editor" data-group="<%= group.group_id %>" data-save-btn="btn-save-tts-auto" placeholder="e.g. Use voice notes for jokes and birthday wishes. Never use voice for homework answers."><%= group.tts_auto_instructions || '' %></textarea>
+            <button id="btn-save-tts-auto" onclick="saveGroupTtsAutoInstructions('<%= group.group_id %>')" disabled>Save</button>
         </div>
     </div>
 

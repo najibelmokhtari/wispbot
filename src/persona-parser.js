@@ -25,7 +25,7 @@
  */
 
 const SECTION_REGEX = /^\[(\w+)\]\s*$/;
-const KNOWN_SECTIONS = new Set(['meta', 'voice', 'system_prompt', 'tts_style']);
+const KNOWN_SECTIONS = new Set(['meta', 'voice', 'system_prompt', 'tts_style', 'tts_auto']);
 const META_LINE_REGEX = /^(\w+)\s*=\s*(.*)$/;
 
 /**
@@ -77,7 +77,7 @@ function serializeMetaSection(meta) {
 }
 
 function parsePersonaFile(content) {
-    const result = { meta: {}, voice: '', systemPrompt: '', ttsStyle: '' };
+    const result = { meta: {}, voice: '', systemPrompt: '', ttsStyle: '', ttsAutoInstructions: '' };
     const lines = content.split('\n');
     let currentSection = null;
     const sectionLines = {};
@@ -96,11 +96,12 @@ function parsePersonaFile(content) {
     if (sectionLines.voice) result.voice = sectionLines.voice.join('\n').trim();
     if (sectionLines.system_prompt) result.systemPrompt = sectionLines.system_prompt.join('\n').trim();
     if (sectionLines.tts_style) result.ttsStyle = sectionLines.tts_style.join('\n').trim();
+    if (sectionLines.tts_auto) result.ttsAutoInstructions = sectionLines.tts_auto.join('\n').trim();
 
     return result;
 }
 
-function serializePersona({ meta, voice, systemPrompt, ttsStyle }) {
+function serializePersona({ meta, voice, systemPrompt, ttsStyle, ttsAutoInstructions }) {
     const parts = [];
 
     if (meta && Object.keys(meta).length > 0) {
@@ -120,6 +121,10 @@ function serializePersona({ meta, voice, systemPrompt, ttsStyle }) {
 
     if (ttsStyle) {
         parts.push(`[tts_style]\n${ttsStyle.trim()}`);
+    }
+
+    if (ttsAutoInstructions) {
+        parts.push(`[tts_auto]\n${ttsAutoInstructions.trim()}`);
     }
 
     return parts.join('\n\n') + '\n';

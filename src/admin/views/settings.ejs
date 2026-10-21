@@ -359,16 +359,20 @@
         <div style="margin-top:0.5rem">
             <label for="default-tts-trigger-mode">Default TTS Trigger Mode</label>
             <small class="field-desc">How TTS is triggered by default for new groups. "By Tag" means the user must
-                include <code id="tts-trigger-preview"><%= settings.tts_trigger || '$audio' %></code> in their message.</small>
+                include <code id="tts-trigger-preview"><%= settings.tts_trigger || '$audio' %></code> in their message.
+                "Let AI decide" lets the AI choose between text and a voice note, guided by each persona's and group's
+                voice reply instructions (the tag still forces a voice note).</small>
             <select id="default-tts-trigger-mode"
                 onchange="updateDefaultDropdown('default_tts_trigger_mode', this.value); toggleTtsTriggerTag();">
                 <option value="tag" <%=(settings.default_tts_trigger_mode || 'tag' )==='tag' ? 'selected' : '' %>>By Tag
                 </option>
                 <option value="always" <%=(settings.default_tts_trigger_mode || 'tag' )==='always' ? 'selected' : '' %>
                     >Always</option>
+                <option value="auto" <%=(settings.default_tts_trigger_mode || 'tag' )==='auto' ? 'selected' : '' %>
+                    >Let AI decide</option>
             </select>
             <div id="tts-trigger-tag-container"
-                style="margin-top:0.75rem;<%= (settings.default_tts_trigger_mode || 'tag') !== 'tag' ? ' display:none;' : '' %>">
+                style="margin-top:0.75rem;<%= (settings.default_tts_trigger_mode || 'tag') === 'always' ? ' display:none;' : '' %>">
                 <label for="tts-trigger-input">Trigger Tag</label>
                 <small class="field-desc">The tag users include in their message to request an audio response.</small>
                 <div class="inline-form">

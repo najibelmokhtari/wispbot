@@ -49,6 +49,9 @@ async function handler(client, message, config) {
                 const triggerMode = groupInfo.tts_trigger_mode || await getBotSetting('default_tts_trigger_mode') || 'tag';
                 if (triggerMode === 'always') {
                     response += `*Voice replies:* I'll reply with audio by default.\n`;
+                } else if (triggerMode === 'auto') {
+                    const ttsTrigger = await getBotSetting('tts_trigger') || config.ttsTrigger || '$audio';
+                    response += `*Voice replies:* I'll send a voice note when it fits the moment. Include *${ttsTrigger}* to always get one.\n`;
                 } else {
                     const ttsTrigger = await getBotSetting('tts_trigger') || config.ttsTrigger || '$audio';
                     response += `*Voice replies:* Include *${ttsTrigger}* in your message and I'll reply with audio.\n`;

@@ -33,7 +33,7 @@ async function updatePersonaField(name, field, value) {
     try {
         persona = await readPersona(name);
     } catch {
-        persona = { meta: {}, voice: '', systemPrompt: '', ttsStyle: '' };
+        persona = { meta: {}, voice: '', systemPrompt: '', ttsStyle: '', ttsAutoInstructions: '' };
     }
     // Support dotted paths like "meta.description"
     if (field.includes('.')) {
@@ -183,15 +183,15 @@ router.delete('/api/personas/:name', async (req, res) => {
     }
 });
 
-// API: get persona TTS settings (voice + style prompt)
+// API: get persona TTS settings (voice, style prompt, auto-mode instructions)
 router.get('/api/personas/:name/tts', async (req, res) => {
     try {
         const name = req.params.name;
         if (!/^[a-z0-9_]+$/.test(name)) return res.status(400).json({ error: 'Invalid persona name' });
         const persona = await readPersona(name);
-        res.json({ voice: persona.voice, stylePrompt: persona.ttsStyle });
+        res.json({ voice: persona.voice, stylePrompt: persona.ttsStyle, autoInstructions: persona.ttsAutoInstructions });
     } catch (error) {
-        res.json({ voice: '', stylePrompt: '' });
+        res.json({ voice: '', stylePrompt: '', autoInstructions: '' });
     }
 });
 
@@ -226,6 +226,23 @@ router.post('/api/personas/:name/tts/style', async (req, res) => {
     } catch (error) {
         logger.error('Admin', `Error saving persona TTS style: ${error.message}`);
         res.status(500).json({ error: 'Failed to save TTS style prompt' });
+    }
+});
+
+// API: save persona instructions for the 'auto' TTS trigger mode
+router.post('/api/personas/:name/tts/auto', async (req, res) => {
+    try {
+        const name = req.params.name;
+        if (!/^[a-z0-9_]+$/.test(name)) return res.status(400).json({ error: 'Invalid persona name' });
+        await updatePersonaField(name, 'ttsAutoInstructions', req.body.content || '');
+
+        if (req.sharedState?.messageQueueManager) {
+            await req.sharedState.messageQueueManager.reloadPrompt(name === 'default' ? 'base' : name);
+        }
+        res.json({ success: true });
+    } catch (error) {
+        logger.error('Admin', `Error saving persona TTS auto instructions: ${error.message}`);
+        res.status(500).json({ error: 'Failed to save voice reply instructions' });
     }
 });
 

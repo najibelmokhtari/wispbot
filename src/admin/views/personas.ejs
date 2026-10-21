@@ -91,6 +91,12 @@
                         placeholder="Loading..." style="margin-top:0.25rem; min-height:150px" oninput="markPersonaDirty('ttsStyle')"></textarea>
                     <button id="btn-save-tts-style" onclick="savePersonaTtsStyle()" disabled>Save TTS Style</button>
 
+                    <h6 style="margin-top:1rem; margin-bottom:0.25rem">Voice Reply Instructions</h6>
+                    <small class="field-desc" id="persona-tts-auto-desc"></small>
+                    <textarea id="persona-tts-auto-editor" class="persona-editor"
+                        placeholder="Loading..." style="margin-top:0.25rem; min-height:120px" oninput="markPersonaDirty('ttsAuto')"></textarea>
+                    <button id="btn-save-tts-auto-persona" onclick="savePersonaTtsAuto()" disabled>Save Voice Reply Instructions</button>
+
                     <!-- Community modified notice -->
                     <div id="persona-community-notice" style="display:none; margin-top:1rem; padding:0.5rem 0.75rem; border-top:1px solid var(--pico-muted-border-color, #ddd)">
                         <small style="color:#888">* Modified from community persona. To restore the original, reinstall it from the <a href="#" onclick="document.getElementById('community-browse-btn').scrollIntoView({behavior:'smooth'}); return false;">community browser</a> below.</small>
