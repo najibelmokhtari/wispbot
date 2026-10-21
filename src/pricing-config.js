@@ -26,6 +26,11 @@ const PRICING_RATES = {
         output: 2.50,
         cache_read: 0.03
     },
+    'gemini-3.8-flash': {
+        input: 0.75,       // Third-party listed introductory rate through Dec 31, 2026 ($1.50 after)
+        output: 3.75,      // Includes thinking tokens ($7.50 after Dec 31, 2026)
+        cache_read: 0.075  // Estimate (10% of input), not yet confirmed
+    },
     'gemini-4-argon': {
         input: 2.00,       // Introductory rate through Nov 30, 2026 ($4.00 after)
         output: 10.00,     // Introductory rate through Nov 30, 2026 ($20.00 after)
@@ -132,6 +137,10 @@ const AVAILABLE_MODELS = {
     'gemini-3.1-pro-preview': {
         displayName: 'Gemini 3.1 Pro Preview',
         description: 'Most capable next-gen model'
+    },
+    'gemini-3.8-flash': {
+        displayName: 'Gemini 3.8 Flash',
+        description: 'Latest fast model'
     },
     'gemini-4-argon': {
         displayName: 'Gemini 4 Argon',
