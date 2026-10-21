@@ -7,6 +7,7 @@ const fs = require('fs').promises;
 const path = require('path');
 const { dbIdToJid } = require('./whatsapp-utils');
 const TTSService = require('./services/tts');
+const { parseVoiceScript } = require('./services/tts-script');
 const logger = require('./logger');
 const { parsePersonaFile } = require('./persona-parser');
 
@@ -234,26 +235,17 @@ class MessageQueueManager {
     // ------------------------------------
 
     /**
-     * Parses an LLM response for TTS into [RESPONSE] and [TTS_STYLE] sections.
-     * Returns an object with { content, stylePrompt }.
-     * Falls back to using the full response as content if parsing fails.
+     * Parses an LLM audio reply (voice script) into plain text and TTS segments.
+     * Returns { content, segments } — content is plain text for history and the text fallback.
      */
     parseTTSResponse(response) {
-        const responseMatch = response.match(/\[RESPONSE\]([\s\S]*?)(?:\[TTS_STYLE\]|$)/);
-        const styleMatch = response.match(/\[TTS_STYLE\]([\s\S]*?)$/);
-
-        if (responseMatch && styleMatch) {
-            return {
-                content: responseMatch[1].trim(),
-                stylePrompt: styleMatch[1].trim()
-            };
+        const parsed = parseVoiceScript(response);
+        if (!/\[(VOICE_SCRIPT|RESPONSE)\]/i.test(response)) {
+            logger.warn('TTS', 'No [VOICE_SCRIPT] block in TTS response, speaking the whole reply unstyled');
         }
-
-        // Fallback: use full response as content, no custom style
-        logger.warn('TTS', 'Failed to parse structured TTS response, using fallback');
         return {
-            content: response.trim(),
-            stylePrompt: null
+            content: parsed.plainText,
+            segments: parsed.segments
         };
     }
     // ------------------------------------
@@ -397,13 +389,12 @@ class MessageQueueManager {
 
                 // Parse TTS response if this is a TTS request
                 let responseContent = aiResponse;
-                let customStylePrompt = null;
+                let voiceSegments = null;
                 if (requestsTTS && ttsEnabled) {
                     const parsed = this.parseTTSResponse(aiResponse);
-                    responseContent = parsed.content;
-                    customStylePrompt = parsed.stylePrompt;
-                    logger.debug('TTS', `Parsed response content length: ${responseContent.length}`);
-                    logger.debug('TTS', `Custom style prompt: ${customStylePrompt || 'Using default'}`);
+                    responseContent = parsed.content; // Plain text (no style markers or vocal tags)
+                    voiceSegments = parsed.segments;
+                    logger.debug('TTS', `Parsed voice script: ${voiceSegments.length} segment(s), styles: ${voiceSegments.map(s => s.style || '(none)').join(' | ')}`);
                 }
 
                 // --- Process response for mentions ---
@@ -417,35 +408,21 @@ class MessageQueueManager {
                     try {
                         logger.info('TTS', `Generating audio for ${groupId}...`);
 
-                        // 1. Determine the style prompt to use
-                        let stylePrompt = customStylePrompt; // Use LLM-generated style if available
-
-                        // Fallback: try persona-specific TTS prompt, then default
-                        if (!stylePrompt) {
-                            stylePrompt = this.promptManager.getTtsStylePrompt(promptName);
-                            if (stylePrompt) {
-                                logger.debug('TTS', `Using persona-specific TTS style prompt for '${promptName}'`);
-                            } else {
-                                // Fall back to default persona's style prompt
-                                stylePrompt = this.promptManager.getTtsStylePrompt('default');
-                                if (stylePrompt) {
-                                    logger.debug('TTS', 'Using default style prompt');
-                                }
-                            }
-                        } else {
-                            logger.debug('TTS', 'Using custom LLM-generated style prompt');
-                        }
+                        // 1. Fallback style for segments the LLM left unstyled: persona style, then default persona's
+                        const defaultStyle = this.promptManager.getTtsStylePrompt(promptName)
+                            || this.promptManager.getTtsStylePrompt('default')
+                            || null;
 
                         // 2. Generate Audio
                         // Resolve voice from persona > default persona > hardcoded fallback
                         const ttsVoice = this.promptManager.getTtsVoice(promptName) || 'Kore';
-                        // Use the parsed response content for TTS (retry once on failure)
+                        // Speak the parsed voice script segments (retry once on failure)
                         let ttsResult;
                         try {
-                            ttsResult = await this.ttsService.generateAudio(responseContent, { stylePrompt, voice: ttsVoice });
+                            ttsResult = await this.ttsService.generateAudio(voiceSegments, { defaultStyle, voice: ttsVoice });
                         } catch (firstAttemptError) {
                             logger.warn('TTS', `First attempt failed: ${firstAttemptError.message}. Retrying...`);
-                            ttsResult = await this.ttsService.generateAudio(responseContent, { stylePrompt, voice: ttsVoice });
+                            ttsResult = await this.ttsService.generateAudio(voiceSegments, { defaultStyle, voice: ttsVoice });
                         }
 
                         ttsCost = ttsResult.costUsd;
@@ -532,7 +509,7 @@ class MessageQueueManager {
                 const newBotMessage = {
                     sender: this.config.botName,
                     senderId: this.config.botUserId,
-                    message: responseContent, // Save only the response content (not the TTS_STYLE section)
+                    message: responseContent, // For voice replies, the plain text without style markers or vocal tags
                     timestamp: new Date().toISOString(),
                     quotedParticipant: null,
                     quotedMsg: null,

@@ -93,33 +93,54 @@ class TTSService {
     }
 
     /**
-     * Generates audio from text using the shared Gemini client.
+     * Whether the model takes per-part styles via speechMetadata (Gemini 3.8 TTS and later).
+     * Older models (2.5) only understand a style prefixed to the text.
      */
-    async generateAudio(text, options = {}) {
-        const stylePrompt = options.stylePrompt;
-        const voiceName = options.voice || this.defaultVoice.name;
+    _supportsSpeechMetadata() {
+        return !/gemini-2\.5/i.test(this.modelName);
+    }
 
-        let contentInput = text;
-        if (stylePrompt) {
-            contentInput = `${stylePrompt}: ${text}`;
+    /**
+     * Builds the request parts from voice script segments.
+     */
+    _buildParts(segments, defaultStyle) {
+        if (this._supportsSpeechMetadata()) {
+            return segments.map(seg => {
+                const style = seg.style || defaultStyle;
+                return style ? { text: seg.text, speechMetadata: { style } } : { text: seg.text };
+            });
         }
+        // Legacy models: one part, the first style spoken as a prefix instruction
+        const style = (segments.find(s => s.style) || {}).style || defaultStyle;
+        const text = segments.map(s => s.text).join('\n');
+        return [{ text: style ? `${style}: ${text}` : text }];
+    }
+
+    /**
+     * Generates audio using the shared Gemini client.
+     * @param {string|{text: string, style: string|null}[]} input - Plain text or voice script segments
+     * @param {{voice?: string, defaultStyle?: string}} options - defaultStyle applies to segments without a style
+     */
+    async generateAudio(input, options = {}) {
+        const segments = typeof input === 'string' ? [{ text: input, style: null }] : input;
+        const voiceName = options.voice || this.defaultVoice.name;
 
         const genAI = getGenAI();
         if (!genAI) {
             throw new Error('TTS Service: Gemini credentials not configured.');
         }
 
+        const voiceConfig = this._supportsSpeechMetadata()
+            ? { voice: voiceName }
+            : { prebuiltVoiceConfig: { voiceName: voiceName } };
+
         try {
             const response = await genAI.models.generateContent({
                 model: this.modelName,
-                contents: [{ role: 'user', parts: [{ text: contentInput }] }],
+                contents: [{ role: 'user', parts: this._buildParts(segments, options.defaultStyle || null) }],
                 config: {
                     responseModalities: ['AUDIO'],
-                    speechConfig: {
-                        voiceConfig: {
-                            prebuiltVoiceConfig: { voiceName: voiceName }
-                        }
-                    }
+                    speechConfig: { voiceConfig }
                 }
             });
 
@@ -131,18 +152,21 @@ class TTSService {
                 throw new Error("No inline audio data found in Gemini response.");
             }
 
-            const rawPcmBase64 = part.inlineData.data;
-            const pcmBuffer = Buffer.from(rawPcmBase64, 'base64');
+            const audioBuffer = Buffer.from(part.inlineData.data, 'base64');
 
-            // Wrap in WAV container (16-bit, 24kHz, mono)
-            const wavBuffer = this._addWavHeader(pcmBuffer, DEFAULT_SAMPLE_RATE_HERTZ, 1, 16);
+            // 3.8 TTS returns a complete WAV file; older models return raw 16-bit PCM that needs a header
+            const isWav = audioBuffer.subarray(0, 4).toString('latin1') === 'RIFF';
+            const rateMatch = (part.inlineData.mimeType || '').match(/rate=(\d+)/);
+            const wavBuffer = isWav
+                ? audioBuffer
+                : this._addWavHeader(audioBuffer, rateMatch ? parseInt(rateMatch[1], 10) : DEFAULT_SAMPLE_RATE_HERTZ, 1, 16);
 
             // Convert WAV to OGG/Opus for WhatsApp compatibility
             const oggBuffer = await this._convertToOgg(wavBuffer);
             const audioContent = oggBuffer.toString('base64');
 
             // Calculate Cost
-            const charCount = text.length;
+            const charCount = segments.reduce((n, s) => n + s.text.length, 0);
             const cost = calculateTTSCost(this.modelName, charCount);
 
             return {
