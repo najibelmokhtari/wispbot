@@ -185,8 +185,9 @@ async function callGeminiAPI(context, config, systemPrompt) {
         }
     }
 
+    // The text part is finalized after attachments, which can still add notes to userMessage
     const msgParts = [
-        { text: userMessage }
+        { text: '' }
     ];
 
     // Helper to attach image part
@@ -297,6 +298,7 @@ Note: only the first ${formatDuration(appConfig.audioAnalysisMaxSeconds)} of the
         }
     }
 
+    msgParts[0].text = userMessage;
     logger.debug('Gemini', 'User Message: ' + userMessage);
 
     for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
