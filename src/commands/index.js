@@ -26,3 +26,4 @@ require('./stop');
 require('./start');
 require('./addme');
 require('./persona');
+require('./listen');

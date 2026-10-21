@@ -11,6 +11,7 @@ const commandDescriptions = {
     '!help': 'Show this help message',
     '!addme': 'Request access to use me (groups only)',
     '!persona': 'Switch persona (e.g. !persona casawi)',
+    '!listen': 'Toggle active listening (or !listen on / !listen off)',
 };
 
 async function handler(client, message, config) {
