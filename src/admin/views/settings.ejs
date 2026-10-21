@@ -259,7 +259,7 @@
                 <label for="default-model">Default AI Model</label>
                 <select id="default-model" onchange="updateDefaultDropdown('default_ai_model', this.value)">
                     <% for (const [key, info] of Object.entries(models)) { %>
-                        <option value="<%= key %>" <%=(settings.default_ai_model || 'gemini-3.1-pro-preview' )===key
+                        <option value="<%= key %>" <%=(settings.default_ai_model || 'gemini-4-argon' )===key
                             ? 'selected' : '' %>><%= info.displayName %>
                         </option>
                         <% } %>

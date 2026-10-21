@@ -181,7 +181,7 @@ router.post('/api/setup/complete', requireSetupIncomplete, async (req, res) => {
         const defaults = {
             bot_active: '1',
             default_persona: 'default',
-            default_ai_model: 'gemini-3.1-pro-preview',
+            default_ai_model: 'gemini-4-argon',
             default_google_search: '1',
             default_audio: '1',
             default_image: '1',

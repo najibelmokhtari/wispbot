@@ -58,7 +58,7 @@ async function initializeDatabase(retries = MAX_RETRIES) {
         google_search_enabled INTEGER DEFAULT 1,
         audio_enabled INTEGER DEFAULT 1,
         image_enabled INTEGER DEFAULT 1,
-        ai_model TEXT DEFAULT 'gemini-3.1-pro-preview',
+        ai_model TEXT DEFAULT 'gemini-4-argon',
         authorization_check_enabled INTEGER DEFAULT 0,
         tts_enabled INTEGER DEFAULT 1,
         is_active INTEGER DEFAULT 0
@@ -362,7 +362,7 @@ async function getOrCreateGroupInfo(groupId, groupName) {
 
     // Use admin-configured defaults from bot_settings, falling back to hardcoded defaults
     const defaultPersona = await getBotSetting('default_persona') || 'default';
-    const defaultModel = await getBotSetting('default_ai_model') || 'gemini-3.1-pro-preview';
+    const defaultModel = await getBotSetting('default_ai_model') || 'gemini-4-argon';
     const defaultSearch = parseInt(await getBotSetting('default_google_search') || '1');
     const defaultAudio = parseInt(await getBotSetting('default_audio') || '1');
     const defaultImage = parseInt(await getBotSetting('default_image') || '1');

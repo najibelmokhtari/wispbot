@@ -59,13 +59,23 @@ class TTSService {
         this._accessToken = null;
         this._tokenExpiry = 0;
 
-        if (!config.googleServiceAccountJson) {
-            logger.error('TTS', "No service account JSON found. Set GOOGLE_SERVICE_ACCOUNT_JSON for Vertex AI TTS.");
+        let rawJson = config.googleServiceAccountJson;
+        if (!rawJson && config.googleServiceAccountFile) {
+            try {
+                rawJson = require('fs').readFileSync(config.googleServiceAccountFile, 'utf8');
+            } catch (err) {
+                logger.error('TTS', `Failed to read GOOGLE_SERVICE_ACCOUNT_FILE (${config.googleServiceAccountFile}): ${err.message}`);
+                return;
+            }
+        }
+
+        if (!rawJson) {
+            logger.error('TTS', "No service account found. Set GOOGLE_SERVICE_ACCOUNT_JSON or GOOGLE_SERVICE_ACCOUNT_FILE for Vertex AI TTS.");
             return;
         }
 
         try {
-            this._serviceAccount = JSON.parse(config.googleServiceAccountJson);
+            this._serviceAccount = JSON.parse(rawJson);
             this._projectId = this._serviceAccount.project_id;
             this._region = config.vertexRegion;
             logger.info('TTS', `Initialized TTS with Vertex AI (project: ${this._projectId}, region: ${this._region}, model: ${this.modelName})`);
@@ -173,6 +183,7 @@ class TTSService {
     _buildPayload(contentInput, voiceName) {
         return {
             contents: [{
+                role: "user",
                 parts: [{ text: contentInput }]
             }],
             generationConfig: {
@@ -210,7 +221,9 @@ class TTSService {
             throw new Error("TTS Service: Service account not configured for Vertex AI.");
         }
         const token = await this._getVertexAccessToken();
-        const url = `https://${this._region}-aiplatform.googleapis.com/v1/projects/${this._projectId}/locations/${this._region}/publishers/google/models/${this.modelName}:generateContent`;
+        // The 'global' location has no regional prefix on the hostname
+        const host = this._region === 'global' ? 'aiplatform.googleapis.com' : `${this._region}-aiplatform.googleapis.com`;
+        const url = `https://${host}/v1/projects/${this._projectId}/locations/${this._region}/publishers/google/models/${this.modelName}:generateContent`;
         return axios.post(url, payload, {
             headers: {
                 'Content-Type': 'application/json',

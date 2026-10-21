@@ -213,13 +213,14 @@ See `.env.example` for a full list with descriptions.
 
 **Important optional:**
 - `BOT_NAME` — Display name of the bot (default: `Wisp`)
-- `AI_MODEL` — Gemini model to use (default: `gemini-2.5-pro`)
+- `AI_MODEL` — Gemini model to use (default: `gemini-4-argon`)
 - `ADMIN_PASSWORD` — Password for the admin panel
 - `ADMIN_SESSION_SECRET` — Secret for session signing (auto-generated if not set)
 - `ADMIN_HOST` — Bind address (default: `127.0.0.1`, set to `0.0.0.0` for remote access)
 - `ADMIN_PORT` — Admin panel port (default: `3000`)
 - `TTS_PROVIDER` — `dev` (Gemini API, default) or `vertex` (Google Cloud)
 - `GOOGLE_SERVICE_ACCOUNT_JSON` — JSON string for Google Cloud Vertex TTS
+- `GOOGLE_SERVICE_ACCOUNT_FILE` — Path to a service account key file (alternative to `GOOGLE_SERVICE_ACCOUNT_JSON`)
 
 ---
 

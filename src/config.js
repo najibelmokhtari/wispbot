@@ -30,7 +30,7 @@ const config = {
 
     // AI provider
     aiProvider: process.env.AI_PROVIDER || 'gemini',
-    aiModel: process.env.AI_MODEL || 'gemini-3.1-pro-preview',
+    aiModel: process.env.AI_MODEL || 'gemini-4-argon',
 
     // Message history
     messageHistoryLimit: envInt('MESSAGE_HISTORY_LIMIT', 20),
@@ -40,10 +40,11 @@ const config = {
     // TTS
     ttsTrigger: process.env.TTS_TRIGGER || '$audio',
     ttsProvider: process.env.TTS_PROVIDER || 'dev',       // 'dev' (Gemini API key) or 'vertex' (service account)
-    ttsModel: process.env.TTS_MODEL || 'gemini-2.5-pro-preview-tts',
+    ttsModel: process.env.TTS_MODEL || 'gemini-3.8-flash-tts',
 
     // Vertex AI (only needed when TTS_PROVIDER=vertex)
     googleServiceAccountJson: process.env.GOOGLE_SERVICE_ACCOUNT_JSON || '',
+    googleServiceAccountFile: process.env.GOOGLE_SERVICE_ACCOUNT_FILE || '',  // Path to a key file; used when the JSON var is empty
     vertexRegion: process.env.VERTEX_REGION || 'us-central1',
 
     // Directories

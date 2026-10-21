@@ -21,6 +21,11 @@ const PRICING_RATES = {
         output: 12.00,
         cache_read: 0.2
     },
+    'gemini-4-argon': {
+        input: 2.00,       // Introductory rate through Nov 30, 2026 ($4.00 after)
+        output: 10.00,     // Introductory rate through Nov 30, 2026 ($20.00 after)
+        cache_read: 0.2    // Estimate (10% of input), not yet confirmed
+    },
     // Default fallback (using Flash rates as a safe default)
     'default': {
         input: 0.075,
@@ -35,6 +40,7 @@ const TTS_PRICING = {
     'gemini-2.5-flash-preview-tts': { input_per_1m: 0.50, output_per_1m: 10.00 },
     'gemini-2.5-pro-tts':           { input_per_1m: 1.00, output_per_1m: 20.00 },
     'gemini-2.5-pro-preview-tts':   { input_per_1m: 1.00, output_per_1m: 20.00 },
+    'gemini-3.8-flash-tts':         { input_per_1m: 0.50, output_per_1m: 9.00 },
     'studio': 160.00,
     'neural2': 16.00,
     'wavenet': 16.00,
@@ -121,6 +127,10 @@ const AVAILABLE_MODELS = {
     'gemini-3.1-pro-preview': {
         displayName: 'Gemini 3.1 Pro Preview',
         description: 'Most capable next-gen model'
+    },
+    'gemini-4-argon': {
+        displayName: 'Gemini 4 Argon',
+        description: 'Latest reasoning model'
     },
 };
 

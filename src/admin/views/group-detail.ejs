@@ -64,7 +64,7 @@
             <label for="select-model">AI Model</label>
             <select id="select-model" data-group="<%= group.group_id %>" onchange="updateDropdown(this, 'ai_model')">
                 <% for (const [key, info] of Object.entries(models)) { %>
-                <option value="<%= key %>" <%= (group.ai_model || 'gemini-3.1-pro-preview') === key ? 'selected' : '' %>><%= info.displayName %></option>
+                <option value="<%= key %>" <%= (group.ai_model || 'gemini-4-argon') === key ? 'selected' : '' %>><%= info.displayName %></option>
                 <% } %>
             </select>
             <label for="select-persona">Persona</label>
