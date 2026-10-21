@@ -3,6 +3,7 @@ const { processMessageHistory } = require('../message-processor');
 const { GoogleGenAI } = require('@google/genai');
 const { calculateCost } = require('../pricing-config');
 const { loadServiceAccount, getAuthMode } = require('./credentials');
+const { ANALYZE_AUDIO_TOOL, analyzeAudio, loadAudioPart, formatDuration } = require('../services/audio-analysis');
 const appConfig = require('../config');
 const fs = require('fs').promises;
 const path = require('path');
@@ -12,6 +13,7 @@ require('dotenv').config();
 
 const MAX_RETRIES = 3;
 const RETRY_DELAY = 1000; // 1 second
+const MAX_TOOL_ROUNDS = 3; // Tool call rounds per reply before the model must answer
 
 // Shared Google GenAI client — authenticated with either a service account (Vertex AI) or an API key
 let genAI = null;
@@ -82,8 +84,14 @@ async function callGeminiAPI(context, config, systemPrompt) {
         tools.push({ urlContext: {} });
     }
 
+    // Let the model listen to voice notes from this chat on demand
+    const audioToolEnabled = context.audioEnabled && !!context.groupId;
+    if (audioToolEnabled) {
+        tools.push({ functionDeclarations: [ANALYZE_AUDIO_TOOL] });
+    }
+
     const modelName = config.aiModel || "gemini-2.5-flash";
-    const chat = genAI.chats.create({
+    const createChat = () => genAI.chats.create({
         model: modelName,
         history: history,
         config: {
@@ -235,9 +243,14 @@ async function callGeminiAPI(context, config, systemPrompt) {
     // Helper to attach audio part
     const attachAudio = async (audioId) => {
         try {
-            const audioData = await getAudioData(config, audioId);
+            // Trimmed to the hard cap (AUDIO_ANALYSIS_MAX_SECONDS)
+            const audioData = await loadAudioPart(audioId);
             if (audioData) {
-                msgParts.push(audioData);
+                msgParts.push(audioData.part);
+                if (audioData.truncated && audioData.duration) {
+                    msgParts.push({ text: `
+Note: only the first ${formatDuration(appConfig.audioAnalysisMaxSeconds)} of the ${formatDuration(audioData.duration)} audio ${audioId} are attached.` });
+                }
             } else {
                 logger.error('Gemini', `Audio file for ID ${audioId} not found.`);
                 msgParts.push({ text: `\nNote: The audio file with ID ${audioId} could not be found.` });
@@ -288,18 +301,47 @@ async function callGeminiAPI(context, config, systemPrompt) {
 
     for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
         try {
-            const response = await chat.sendMessage({ message: msgParts });
+            // Fresh chat per attempt so a failed tool round doesn't leave partial history behind
+            const chat = createChat();
+            let inputTokens = 0, outputTokens = 0, cachedTokens = 0, toolCost = 0;
+            const addUsage = (res) => {
+                const usage = res.usageMetadata || {};
+                inputTokens += usage.promptTokenCount || 0;
+                outputTokens += usage.candidatesTokenCount || 0;
+                cachedTokens += usage.cachedContentTokenCount || 0;
+            };
+
+            let response = await chat.sendMessage({ message: msgParts });
+            addUsage(response);
+
+            // Tool loop: run requested function calls and send the results back
+            for (let round = 1; response.functionCalls && response.functionCalls.length > 0; round++) {
+                const lastRound = round > MAX_TOOL_ROUNDS;
+                const resultParts = [];
+                for (const call of response.functionCalls) {
+                    let result;
+                    if (lastRound) {
+                        result = { error: 'Tool call limit reached. Answer now with the information you already have.' };
+                    } else if (call.name === ANALYZE_AUDIO_TOOL.name && audioToolEnabled) {
+                        logger.info('Gemini', `Tool call: analyze_audio ${JSON.stringify(call.args)}`);
+                        const out = await analyzeAudio(context.groupId, call.args);
+                        toolCost += out.costUsd;
+                        result = out.response;
+                    } else {
+                        result = { error: `Unknown tool ${call.name}` };
+                    }
+                    resultParts.push({ functionResponse: { id: call.id, name: call.name, response: result } });
+                }
+                response = await chat.sendMessage({ message: resultParts });
+                addUsage(response);
+                if (lastRound) break;
+            }
+
             logger.debug('Gemini', 'Gemini API Response Object: ' + JSON.stringify(response, null, 2));
-            const text = response.text;
+            const text = response.text || '';
 
-            // Extract usage metadata directly from the response
-            const usage = response.usageMetadata || {};
-            const inputTokens = usage.promptTokenCount || 0;
-            const outputTokens = usage.candidatesTokenCount || 0;
-            const cachedTokens = usage.cachedContentTokenCount || 0;
-
-            // Calculate estimated cost
-            const cost = calculateCost('google', modelName, inputTokens, outputTokens, cachedTokens);
+            // Calculate estimated cost (main model across all rounds + audio tool calls)
+            const cost = calculateCost('google', modelName, inputTokens, outputTokens, cachedTokens) + toolCost;
 
             return {
                 response: text,
@@ -346,45 +388,6 @@ async function encodeImageToBase64(imagePath) {
         logger.error('Gemini', `Error encoding image to base64: ${error.message}`);
         throw error;
     }
-}
-
-async function encodeAudioToBase64(audioPath) {
-    try {
-        const audioBuffer = await fs.readFile(audioPath);
-        return audioBuffer.toString('base64');
-    } catch (error) {
-        logger.error('Gemini', `Error encoding audio to base64: ${error.message}`);
-        throw error;
-    }
-}
-
-// New helper function to find and encode audio
-async function getAudioData(config, audioId) {
-    const audioDir = config.audioDirectory;
-    try {
-        const files = await fs.readdir(audioDir);
-        const audioFile = files.find(file => file.startsWith(audioId));
-
-        if (audioFile) {
-            const audioPath = path.join(audioDir, audioFile);
-            const audioBase64 = await encodeAudioToBase64(audioPath);
-            const ext = path.extname(audioFile).toLowerCase();
-            let mimeType = 'audio/ogg';
-            if (ext === '.mp3') mimeType = 'audio/mp3';
-            if (ext === '.wav') mimeType = 'audio/wav';
-            if (ext === '.m4a') mimeType = 'audio/mp4';
-
-            return {
-                inlineData: {
-                    mimeType: mimeType,
-                    data: audioBase64
-                }
-            };
-        }
-    } catch (error) {
-        logger.error('Gemini', 'Error finding audio file: ' + error.message);
-    }
-    return null;
 }
 
 function getGenAI() {

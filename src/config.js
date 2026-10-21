@@ -49,6 +49,14 @@ const config = {
     // Gemini auth: 'api_key' or 'service_account'; empty = service account if configured, else API key
     geminiAuth: process.env.GEMINI_AUTH || '',
 
+    // Audio analysis (voice note previews and the on-demand analyze_audio tool)
+    audioPreviewModel: process.env.AUDIO_PREVIEW_MODEL || 'gemini-3.5-flash-lite',   // Short previews
+    audioAnalysisModel: process.env.AUDIO_ANALYSIS_MODEL || 'gemini-3.5-flash-lite', // Full transcripts and questions (analyze_audio tool)
+    // Thinking level for analyze_audio calls; without it Flash-Lite stops early on longer voice notes
+    audioAnalysisThinkingLevel: process.env.AUDIO_ANALYSIS_THINKING_LEVEL || 'high',
+    audioPreviewSeconds: envInt('AUDIO_PREVIEW_SECONDS', 10),          // Default preview length when a group doesn't set one
+    audioAnalysisMaxSeconds: envInt('AUDIO_ANALYSIS_MAX_SECONDS', 480), // Hard cap: the AI hears at most this much of any voice note
+
     // Directories
     dataDirectory: process.env.DATA_DIRECTORY || 'data',
     imageDirectory: process.env.IMAGE_DIRECTORY || 'data/images',

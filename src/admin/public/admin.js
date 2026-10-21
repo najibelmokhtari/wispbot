@@ -528,6 +528,31 @@ async function saveAudioDurationCap(groupId) {
     }
 }
 
+// Save group voice note preview length
+async function saveAudioPreviewSeconds(groupId) {
+    const val = document.getElementById('audio-preview-seconds-input').value.trim();
+    const seconds = val !== '' ? parseInt(val) : null;
+    try {
+        const res = await fetch(`${BASE}/api/groups/${encodeURIComponent(groupId)}/settings`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ audio_preview_seconds: seconds })
+        });
+        if (!res.ok) throw new Error('Failed');
+        showToast(val !== '' ? `Preview length set to ${val}s` : 'Preview length reset to default', 'success');
+        markClean('audio-preview-seconds-input');
+    } catch (e) {
+        showToast('Failed to save preview length', 'error');
+    }
+}
+
+// Show the preview length only when voice note previews are on
+function toggleAudioPreviewSeconds() {
+    const select = document.getElementById('select-audio-preview');
+    const container = document.getElementById('audio-preview-seconds-container');
+    if (select && container) container.style.display = select.value === '1' ? '' : 'none';
+}
+
 // Toggle audio history count visibility based on mode
 function toggleAudioHistoryCount() {
     const mode = document.getElementById('select-audio-mode');

@@ -706,6 +706,7 @@ class MessageQueueManager {
             groupName: groupInfo.group_name,
             groupSummary: groupSummary,
             groupParticipants: groupParticipants,
+            groupId: message.from,
             groupCustomContext: groupCustomContext,
             groupMemories: groupMemories,
             recentMessages: redactedHistory,

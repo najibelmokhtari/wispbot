@@ -21,6 +21,11 @@ const PRICING_RATES = {
         output: 12.00,
         cache_read: 0.2
     },
+    'gemini-3.5-flash-lite': {
+        input: 0.30,       // Third-party listed rate; no separate audio input rate published
+        output: 2.50,
+        cache_read: 0.03
+    },
     'gemini-4-argon': {
         input: 2.00,       // Introductory rate through Nov 30, 2026 ($4.00 after)
         output: 10.00,     // Introductory rate through Nov 30, 2026 ($20.00 after)

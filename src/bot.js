@@ -1,5 +1,6 @@
 // --- Baileys WhatsApp Bot ---
 const { hasGeminiCredentials } = require('./ai/credentials');
+const { transcribePreview } = require('./services/audio-analysis');
 const { default: makeWASocket, DisconnectReason, useMultiFileAuthState, downloadMediaMessage, getContentType, jidNormalizedUser, fetchLatestBaileysVersion } = require('@whiskeysockets/baileys');
 const pino = require('pino');
 const QRCode = require('qrcode');
@@ -796,8 +797,9 @@ async function processAndStoreMessage(client, message) {
     }
 
     let audioId = null;
+    let audioGroupInfo = null;
     if (message.hasMedia && (message.type === 'audio' || message.type === 'ptt')) {
-        const groupInfo = await getOrCreateGroupInfo(message.from, message.groupInfo?.name || message.dmContactName || 'Unknown Group');
+        const groupInfo = audioGroupInfo = await getOrCreateGroupInfo(message.from, message.groupInfo?.name || message.dmContactName || 'Unknown Group');
         const durationCap = groupInfo.audio_duration_cap;
         const audioDuration = message.duration || 0;
 
@@ -827,12 +829,24 @@ async function processAndStoreMessage(client, message) {
         quotedMsg: quotedMessage ? quotedMessage.body : null,
         imageId: imageId,
         audioId: audioId,
+        audioDuration: audioId ? (message.duration || null) : null,
         quotedParticipant: quotedMessage ? (quotedMessage.author || quotedMessage.from) : null,
         whatsappMessageId: message.id._serialized,
         quotedWhatsappMessageId: quotedMessage ? quotedMessage.id._serialized : null
     };
 
     await conversationStore.addMessageToConversation(message.from, newMessage);
+
+    // Transcribe the opening seconds of the voice note in the background (per-group opt-in)
+    if (audioId && audioGroupInfo && audioGroupInfo.audio_enabled === 1 && audioGroupInfo.audio_preview_enabled === 1) {
+        transcribePreview({
+            groupId: message.from,
+            audioId,
+            duration: message.duration || 0,
+            seconds: audioGroupInfo.audio_preview_seconds || config.audioPreviewSeconds
+        });
+    }
+
     addPhoneToUsernameMapping(contact.id._serialized, contact.pushname || contact.name || 'Unknown User');
 }
 

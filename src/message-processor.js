@@ -3,6 +3,19 @@ const path = require('path');
 const logger = require('./logger');
 const { replacePhoneNumbersWithUsernames } = require('./phone-number-replacer');
 
+/**
+ * Formats the history marker for a voice note: id, duration and (if transcribed) its opening words.
+ */
+function formatAudioMarker(msg) {
+    let marker = `Audio: ${msg.audio_id}`;
+    if (msg.audio_duration) {
+        const s = Math.round(msg.audio_duration);
+        marker += s < 60 ? `, ${s}s` : `, ${Math.floor(s / 60)}m${String(s % 60).padStart(2, '0')}s`;
+    }
+    if (msg.audio_preview) marker += `, starts with: "${msg.audio_preview}"`;
+    return ` (${marker})`;
+}
+
 function truncateMessage(message, maxLength = 100) {
     if (typeof message !== 'string') {
         return '';
@@ -48,7 +61,7 @@ function formatQuotedMessage(msg, config) {
     }
 
     if (msg.audio_id) {
-        result += ` (Audio: ${msg.audio_id})`;
+        result += formatAudioMarker(msg);
     }
 
     return result;
@@ -100,6 +113,7 @@ async function addToHistory(messageHistory, groupId, sender, message, imageBuffe
 }
 
 module.exports = {
+    formatAudioMarker,
     processMessageHistory,
     addToHistory,
     removeExtendedHistoryCode

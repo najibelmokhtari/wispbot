@@ -2,6 +2,7 @@ const fs = require('fs').promises;
 const path = require('path');
 const logger = require('../logger');
 const { replacePhoneNumbersWithUsernames } = require('../phone-number-replacer');
+const { formatAudioMarker } = require('../message-processor');
 
 /**
  * Memory extraction handler for the background processor.
@@ -40,7 +41,7 @@ async function memoriesHandler(groupId, messages, ctx) {
     const formattedMessages = messages.map(msg => {
         const sender = replacePhoneNumbersWithUsernames(msg.sender_id || msg.sender);
         const displayName = msg.sender || sender;
-        return `${msg.timestamp} - ${displayName}: ${msg.message || ''}`;
+        return `${msg.timestamp} - ${displayName}: ${msg.message || ''}${msg.audio_id ? formatAudioMarker(msg) : ''}`;
     }).join('\n');
 
     // Build the prompt

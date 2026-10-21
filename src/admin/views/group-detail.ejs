@@ -112,6 +112,26 @@
                 <button onclick="saveAudioDurationCap('<%= group.group_id %>')">Save</button>
             </div>
         </div>
+        <div class="settings-grid" style="margin-top:0.75rem">
+            <div>
+                <label for="select-audio-preview">Voice Note Previews</label>
+                <small class="field-desc">Transcribe the opening seconds of every voice note in the background, so the AI sees what each one starts with in the chat history. It can always listen to a whole voice note on demand.</small>
+                <select id="select-audio-preview" data-group="<%= group.group_id %>" onchange="updateDropdown(this, 'audio_preview_enabled'); toggleAudioPreviewSeconds();">
+                    <option value="0" <%= group.audio_preview_enabled ? '' : 'selected' %>>Off</option>
+                    <option value="1" <%= group.audio_preview_enabled ? 'selected' : '' %>>On</option>
+                </select>
+            </div>
+            <div id="audio-preview-seconds-container" style="<%= group.audio_preview_enabled ? '' : 'display:none;' %>">
+                <label for="audio-preview-seconds-input">Preview Length (seconds)</label>
+                <small class="field-desc">How much of each voice note to transcribe. Leave empty for default (<%= defaultAudioPreviewSeconds %>s).</small>
+                <div class="inline-form">
+                    <input type="number" id="audio-preview-seconds-input" min="1" max="120" step="1"
+                        value="<%= group.audio_preview_seconds || '' %>"
+                        placeholder="<%= defaultAudioPreviewSeconds %>">
+                    <button onclick="saveAudioPreviewSeconds('<%= group.group_id %>')">Save</button>
+                </div>
+            </div>
+        </div>
     </div>
 
     <div id="image-settings-section" style="<%= group.image_enabled ? '' : 'display:none;' %>">

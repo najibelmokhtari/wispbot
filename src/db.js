@@ -118,6 +118,24 @@ async function initializeDatabase(retries = MAX_RETRIES) {
       // Column likely exists, ignore error
     }
 
+    // Migration: Audio duration, short transcript preview and cached full transcript
+    for (const column of ['audio_duration INTEGER', 'audio_preview TEXT', 'audio_transcript TEXT']) {
+      try {
+        await db.exec(`ALTER TABLE conversations ADD COLUMN ${column}`);
+      } catch (error) {
+        // Column likely exists, ignore error
+      }
+    }
+
+    // Migration: Per-group audio preview transcription (off by default)
+    for (const column of ['audio_preview_enabled INTEGER DEFAULT 0', 'audio_preview_seconds INTEGER DEFAULT NULL']) {
+      try {
+        await db.exec(`ALTER TABLE group_info ADD COLUMN ${column}`);
+      } catch (error) {
+        // Column likely exists, ignore error
+      }
+    }
+
     // Migration: Add ai_model column to group_info if it doesn't exist
     try {
       await db.exec('ALTER TABLE group_info ADD COLUMN ai_model TEXT DEFAULT \'gemini-2.5-pro\'');
@@ -422,6 +440,7 @@ const ALLOWED_GROUP_COLUMNS = new Set([
   'active_listening_send_audio', 'active_listening_send_images',
   'active_listening_audio_count', 'active_listening_image_count',
   'image_history_mode', 'image_history_count',
+  'audio_preview_enabled', 'audio_preview_seconds',
 ]);
 
 async function updateGroupInfo(groupId, updateData) {

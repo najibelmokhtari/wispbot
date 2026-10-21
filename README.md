@@ -33,6 +33,7 @@ npm start
 - **Community personas** — Browse and install personas from a shared [community repo](https://github.com/najibelmokhtari/wispbot-personas)
 - **Message batching** — Groups rapid messages into a single context window before replying
 - **Text-to-speech** — Expressive voice notes via Gemini 3.8 Flash TTS: the AI writes a voice script with per-segment delivery (whispering, shouting, singing, emotion, pace) and inline vocal events like `<laugh>` or `<sigh>`
+- **Voice note understanding** — Optional per-group previews transcribe the first seconds of every voice note into the chat history, and the AI can call an `analyze_audio` tool to transcribe or ask questions about any voice note on demand
 - **Image understanding** — Reads and describes images sent in the chat
 - **Audio understanding** — Processes voice messages and audio files
 - **Web search** — Can search the web and summarize results (toggleable per group)

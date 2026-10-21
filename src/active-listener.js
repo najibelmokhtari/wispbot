@@ -4,6 +4,8 @@ const TokenUsageTracker = require('./token-usage-tracker');
 const conversationStore = require('./conversation-store');
 const { getOrCreateGroupInfo, getBotSetting } = require('./db');
 const { replacePhoneNumbersWithUsernames } = require('./phone-number-replacer');
+const { formatAudioMarker } = require('./message-processor');
+const { loadAudioPart } = require('./services/audio-analysis');
 const fs = require('fs').promises;
 const path = require('path');
 const logger = require('./logger');
@@ -106,7 +108,7 @@ class ActiveListener {
                 const label = isBotMessage ? `${displayName} (this is you, the bot)` : displayName;
                 let line = `${label}: ${msg.message || ''}`;
                 if (msg.audio_id) {
-                    line += ` (Audio: ${msg.audio_id})`;
+                    line += formatAudioMarker(msg);
                 }
                 if (msg.image_id) {
                     line += ` (Image: ${msg.image_id})`;
@@ -290,20 +292,11 @@ class ActiveListener {
 
     async _getMediaData(audioDir, audioId, type) {
         try {
-            const files = await fs.readdir(audioDir);
-            const audioFile = files.find(file => file.startsWith(audioId));
-            if (audioFile) {
-                const audioPath = path.join(audioDir, audioFile);
-                const buffer = await fs.readFile(audioPath);
-                const ext = path.extname(audioFile).toLowerCase();
-                let mimeType = 'audio/ogg';
-                if (ext === '.mp3') mimeType = 'audio/mp3';
-                else if (ext === '.wav') mimeType = 'audio/wav';
-                else if (ext === '.m4a') mimeType = 'audio/mp4';
-                return { inlineData: { mimeType, data: buffer.toString('base64') } };
-            }
+            // Shared loader: correct MIME type and trimmed to the hard cap (AUDIO_ANALYSIS_MAX_SECONDS)
+            const audioData = await loadAudioPart(audioId);
+            if (audioData) return audioData.part;
         } catch (err) {
-            logger.warn('ActiveListener', `${type} file ${audioId} not found: ${err.message}`);
+            logger.warn('ActiveListener', `${type} file ${audioId} could not be loaded: ${err.message}`);
         }
         return null;
     }
