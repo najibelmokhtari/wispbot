@@ -1,6 +1,9 @@
 // --- Baileys WhatsApp Bot ---
 const { hasGeminiCredentials } = require('./ai/credentials');
 const { transcribePreview } = require('./services/audio-analysis');
+const { lidToPhone, registerLidMapping, resolveLid, isBotMentionedIn: isBotMentionedWith } = require('./lid-utils');
+
+const isBotMentionedIn = (message) => isBotMentionedWith(message, config);
 const { default: makeWASocket, DisconnectReason, useMultiFileAuthState, downloadMediaMessage, getContentType, jidNormalizedUser, fetchLatestBaileysVersion } = require('@whiskeysockets/baileys');
 const pino = require('pino');
 const QRCode = require('qrcode');
@@ -150,23 +153,7 @@ const OFFLINE_TRIGGER_DEBOUNCE_MS = 3000;
 // --- Shared state (persists across socket restarts) ---
 let botInitialized = false;
 
-// --- LID-to-phone mapping (populated from Baileys events) ---
-const lidToPhone = new Map(); // LID JID → phone JID (e.g. "123@lid" → "456@s.whatsapp.net")
-
-function registerLidMapping(lid, phoneJid) {
-    if (lid && phoneJid && lid !== phoneJid) {
-        lidToPhone.set(lid, phoneJid);
-    }
-}
-
-/** Resolve a JID — if it's a LID, return the phone JID; otherwise return as-is */
-function resolveLid(jid) {
-    if (!jid) return jid;
-    if (jid.endsWith('@lid') && lidToPhone.has(jid)) {
-        return lidToPhone.get(jid);
-    }
-    return jid;
-}
+// --- LID-to-phone mapping and bot mention detection: see lid-utils.js ---
 
 // --- Health check ---
 let healthCheckInterval = null;
@@ -633,10 +620,7 @@ async function handleIncomingMessage(sockRef, msg) {
 
         if (offlineMode === 'last_trigger' && chat.isGroup) {
             // Detect mention/reply early for offline trigger tracking
-            const mentionedIds = message.mentionedIds || [];
-            const isBotMentioned = mentionedIds.includes(config.botUserId)
-                || message.body.includes(`@${config.botName}`)
-                || message.body.includes(`@${config.botNumber}`);
+            const isBotMentioned = isBotMentionedIn(message);
             const quotedMessage = message.hasQuotedMsg ? await message.getQuotedMessage() : null;
             const quotedAuthor = quotedMessage ? (quotedMessage.author || quotedMessage.from) : null;
             const isReplyToBot = quotedAuthor ? (quotedAuthor === config.botUserId) : false;
@@ -667,9 +651,7 @@ async function handleIncomingMessage(sockRef, msg) {
 
     // Mention/reply detection
     const mentionedIds = message.mentionedIds || [];
-    const isBotMentioned = mentionedIds.includes(config.botUserId)
-        || message.body.includes(`@${config.botName}`)
-        || message.body.includes(`@${config.botNumber}`);
+    const isBotMentioned = isBotMentionedIn(message);
     logger.debug('Message', `Mention check: mentionedIds=${JSON.stringify(mentionedIds)}, botUserId=${config.botUserId}, isBotMentioned=${isBotMentioned}`);
 
     const quotedMessage = message.hasQuotedMsg ? await message.getQuotedMessage() : null;
@@ -736,15 +718,8 @@ async function handleIncomingMessage(sockRef, msg) {
 
         const useActiveListening = groupInfo.active_listening_enabled === 1;
 
-        if (useActiveListening) {
-            if (activeListener) {
-                try {
-                    activeListener.feedMessage(message.from, message, client, { isBotMentioned, isReplyToBot });
-                } catch (alErr) {
-                    logger.error('ActiveListener', 'Error feeding message: ' + alErr.message);
-                }
-            }
-        } else if (isBotMentioned || isReplyToBot) {
+        if (isBotMentioned || isReplyToBot) {
+            // Tagging the bot or replying to it always gets a response, also in active listening mode
             const authCheckEnabled = groupInfo.authorization_check_enabled !== 0;
 
             if (!authCheckEnabled) {
@@ -758,6 +733,12 @@ async function handleIncomingMessage(sockRef, msg) {
                 } else {
                     logger.warn('Auth', `Unauthorized user ${contact.id._serialized} (${contact.pushname}) attempted to invoke bot`);
                 }
+            }
+        } else if (useActiveListening && activeListener) {
+            try {
+                activeListener.feedMessage(message.from, message, client, { isBotMentioned, isReplyToBot });
+            } catch (alErr) {
+                logger.error('ActiveListener', 'Error feeding message: ' + alErr.message);
             }
         }
 
@@ -789,6 +770,8 @@ async function handleIncomingMessage(sockRef, msg) {
 async function processAndStoreMessage(client, message) {
     let imageId = null;
     let messageText = message.body || 'Sent a message';
+    if (config.botLidNumber) messageText = messageText.split(`@${config.botLidNumber}`).join(`@${config.botName}`);
+    if (config.botNumber) messageText = messageText.split(`@${config.botNumber}`).join(`@${config.botName}`);
 
     if (message.hasMedia && message.type === 'image') {
         imageId = await processAndStoreImage(client, message);
@@ -1100,6 +1083,7 @@ async function _startSocketInternal() {
                     // Register LID→phone mapping for the bot itself
                     if (sock.user.lid) {
                         registerLidMapping(sock.user.lid, normalizedId);
+                        config.botLidNumber = jidNormalizedUser(sock.user.lid).split('@')[0];
                         logger.info('Bot', `Registered bot LID mapping: ${sock.user.lid} → ${normalizedId}`);
                     }
                     if (sock.user.id !== normalizedId) {
